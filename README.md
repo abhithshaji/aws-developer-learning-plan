@@ -4,7 +4,7 @@
 [![AWS CDK](https://img.shields.io/badge/CDK-v2-red?logo=amazon-aws&logoColor=white)](https://aws.amazon.com/cdk/)
 [![Python](https://img.shields.io/badge/Python-3.x-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/Status-In%20Progress-brightgreen)](#-repository-roadmap--structure)
-[![Learning Plan](/AWS%20Skill%20Builder-Devhttps://img.shields.io/badgeeloper%20Learning%20Plan-yellow)](https://skillbuilder.aws/)
+[![Learning Plan](https://img.shields.io/badge/AWS%20Skill%20Builder-Developer%20Learning%20Plan-yellow)](https://skillbuilder.aws)
 
 A structured, module-by-module code reference guide for developers progressing through the **AWS Developer Learning Plan** on **AWS Skill Builder**.
 
