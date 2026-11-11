@@ -77,20 +77,23 @@ Each folder represents an individual milestone in the learning plan:
 
 ```text
 aws-developer-learning-plan/
-├── 01_introduction_to_aws_developer_learning_plan/   # Environment setup, CLI verification & resource provisioning
-├── 02_introduction_to_being_an_aws_developer/        # AWS naming conventions, partition considerations & namespacing
-├── 03_building_your_first_serverless_api/            # CDK project init, virtual env setup & basic API stack
-└── README.md                                         # Main documentation & companion guide
+├── 01_introduction_to_aws_developer_learning_plan/   
+├── 02_introduction_to_being_an_aws_developer/        
+├── 03_building_your_first_serverless_api/
+├── ... 
+├── ...            
+└── README.md                                  
 ```
 
 ### Module Breakdown
 
 | Module | Topic / Focus | Key Concepts & AWS Services | Status |
 |---|---|---|:---:|
-| **01** | [Introduction & Setup](./01_introduction_to_aws_developer_learning_plan) | CLI verification, DynamoDB provisioning, S3 bucket creation, data seeding | ✅ Complete |
-| **02** | [AWS Developer Fundamentals](./02_introduction_to_being_an_aws_developer) | Resource naming strategies, global vs regional scope, namespace isolation | ✅ Complete |
-| **03** | [First Serverless API](./03_building_your_first_serverless_api) | AWS CDK (Python), API Gateway, Lambda, virtual environments | 🔄 In Progress |
-| **04+** | *Upcoming Modules* | Data access, SQS/SNS messaging, Cognito authentication, CI/CD, Observability | ⏳ Planned |
+| **01** | [Introduction to AWS Developer Learning Plan](./01_introduction_to_aws_developer_learning_plan) | establishing essential AWS concepts and configuring your development environment | ✅ Complete |
+| **02** | [Introduction to Being an AWS Developer](./02_introduction_to_being_an_aws_developer) | evaluate compute options and understand your role as an AWS developer | ✅ Complete |
+| **03** | [Building Your First Serverless API](./03_building_your_first_serverless_api) | build and deploy a working REST API using AWS Lambda and Amazon API Gateway | ✅ Complete |
+| **04** | [Adding Data to Your API](./04_adding_data_to_your_api) | integrate Amazon DynamoDB with your Lambda functions | ✅ Complete |
+| **05+** | *Upcoming Modules* | Data access, SQS/SNS messaging, Cognito authentication, CI/CD, Observability | ⏳ Planned |
 
 ---
 
