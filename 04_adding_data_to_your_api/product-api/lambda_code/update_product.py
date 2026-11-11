@@ -1,10 +1,43 @@
-from catalog import create_response
-
+import json
+from utils.response_utils import create_success_response, create_error_response
+from db.products_db import update_product, update_product_with_version
+from db.product_schema import ProductInput
+from pydantic import ValidationError
 
 def handler(event, context):
-    # Product updates require persistent storage. You implement this
-    # with Amazon DynamoDB in the data module of this learning plan.
-    return create_response(501, {
-        "error": "NotImplementedError",
-        "message": "PUT /products/{id} is implemented in the data module of this learning plan"
-    })
+    try:
+        body = event.get('body') or ''
+        product_id = event.get('pathParameters', {}).get('id')
+        expected_version = event.get('pathParameters', {}).get('expected_version')
+        
+        if not product_id:
+            return create_error_response(400, 'Product id is required')
+        
+        raw_data = json.loads(body)
+        
+        # Validate input using Pydantic
+        product_input = ProductInput(**raw_data)
+        validated_data = product_input.model_dump()
+        
+        # Extract user ARN from request context
+        user_arn = event.get('requestContext', {}).get('identity', {}).get('userArn', 'unknown')
+        
+        # Update in DynamoDB
+        if expected_version:
+            updated = update_product_with_version(product_id, validated_data, user_arn, expected_version)
+        else:
+            updated = update_product(product_id, validated_data, user_arn)
+            
+        return create_success_response(200, updated)
+        
+    except ValidationError as e:
+        errors = e.errors()
+        error_messages = [f"{err['loc'][0]}: {err['msg']}" for err in errors]
+        return create_error_response(400, f'Validation failed: {", ".join(error_messages)}')
+    except ValueError as e:
+        return create_error_response(404, str(e))
+    except json.JSONDecodeError as e:
+        return create_error_response(400, f'Invalid JSON: {str(e)}')
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        return create_error_response(500, f'Internal server error - {str(e)}')

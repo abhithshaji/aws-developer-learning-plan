@@ -1,19 +1,20 @@
-from catalog import create_response, get_product
-
+# Handler for GET /products/{id}
+from utils.response_utils import create_success_response, create_error_response
+from db.products_db import get_product
 
 def handler(event, context):
     try:
-        product_id = (event.get("pathParameters") or {}).get("id")
-
-        if not product_id:
-            return create_response(400, {"error": "Product ID required"})
-
-        product = get_product(product_id)
-        if not product:
-            return create_response(404, {"error": "Product not found"})
-
-        return create_response(200, product)
-
+        path_parameters = event.get('pathParameters') or {}
+        product_id = path_parameters.get('id')
+        
+        if product_id:
+            product = get_product(product_id)
+            if product:
+                return create_success_response(200, product)
+            else:
+                return create_error_response(404, 'Product not found')
+        else:
+            return create_error_response(400, 'Product id is required')
     except Exception as e:
-        print(f"Error: {str(e)}")  # Log for debugging
-        return create_response(500, {"error": "Internal server error"})
+        print(f"Unexpected error: {str(e)}")
+        return create_error_response(500, f'Internal server error - {str(e)}')
