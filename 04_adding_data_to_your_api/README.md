@@ -37,8 +37,8 @@ cd product-api
 source .venv/bin/activate                 # macOS/Linux
 # .venv\Scripts\Activate.ps1             # Windows PowerShell
 
-# Install Pydantic for local development & validation
-pip install pydantic
+# Install requirements.txt libs
+pip install -r requirements.txt
 ```
 
 Ensure `pydantic>=2.0.0` is present in your `requirements.txt`:
