@@ -1,20 +1,34 @@
 # Handler for GET /products/{id}
-from utils.response_utils import create_success_response, create_error_response
+from utils.response_utils import create_success_response, create_error_response, ContextualErrorHandler
 from db.products_db import get_product
+import logging
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 def handler(event, context):
     try:
         path_parameters = event.get('pathParameters') or {}
+        query_params = event.get('queryStringParameters') or {}
         product_id = path_parameters.get('id')
         
-        if product_id:
-            product = get_product(product_id)
-            if product:
-                return create_success_response(200, product)
-            else:
-                return create_error_response(404, 'Product not found')
-        else:
+        if not product_id:
             return create_error_response(400, 'Product id is required')
+        
+         # 1. Build context from the request (e.g. search query or category filter)
+        user_context = {
+            'search_term': query_params.get('search'),
+            'category': query_params.get('category')
+        }
+        error_handler = ContextualErrorHandler(user_context=user_context)
+
+        product = get_product(product_id)
+
+        if not product:
+            return error_handler.handle_product_not_found(product_id)
+
+        return create_success_response(200, product)
+
     except Exception as e:
-        print(f"Unexpected error: {str(e)}")
-        return create_error_response(500, f'Internal server error - {str(e)}')
+        logger.error(f"Unexpected error processing product {product_id}: {str(e)}")
+        return create_error_response(500, 'Internal server error')
