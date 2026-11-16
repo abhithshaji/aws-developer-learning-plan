@@ -107,7 +107,7 @@ aws-developer-learning-plan/
 | **02** | [Introduction to Being an AWS Developer](./02_introduction_to_being_an_aws_developer) | Evaluate compute options and understand your role as an AWS developer | ✅ Complete |
 | **03** | [Building Your First Serverless API](./03_building_your_first_serverless_api) | Build and deploy a working REST API using AWS Lambda and Amazon API Gateway | ✅ Complete |
 | **04** | [Adding Data to Your API](./04_adding_data_to_your_api) | Integrate Amazon DynamoDB, Pydantic request validation, and Lambda layers | ✅ Complete |
-| **05** | [Testing, Error Handling & Resilience](./05_testing_and_error_handling) | Automated unit testing (Pytest/Moto), Dead-Letter Queues (DLQ), Lambda Destinations, Exponential Backoff, Circuit Breakers, and SAM CLI local testing | ✅ Complete |
+| **05** | [Testing and Error Handling](./05_testing_and_error_handling) | Automated unit testing (Pytest/Moto), Dead-Letter Queues (DLQ), Lambda Destinations, Exponential Backoff, Circuit Breakers, and SAM CLI local testing | ✅ Complete |
 | **06+** | *Upcoming Modules* | Data modeling & access patterns, messaging (SQS/SNS), Cognito authentication, CI/CD pipelines, Observability | ⏳ Planned |
 
 ---

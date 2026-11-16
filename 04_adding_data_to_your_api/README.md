@@ -204,3 +204,9 @@ cdk destroy ProductApiStack
 # Verify stack deletion status
 aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE
 ```
+
+---
+
+## ⏭️ Next Step
+
+Proceed to **[Module 05: Testing and Error Handling](../05_testing_and_error_handling/README.md)**, where we introduce a complete testing strategy and production-grade resilience patterns to our serverless product API.

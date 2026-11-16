@@ -1,4 +1,4 @@
-# 📦 Module 05: Testing, Error Handling & Resilience
+# 📦 Module 05: Testing and Error Handling
 
 In this module, we introduce a complete testing strategy and production-grade resilience patterns to our serverless product API. We implement comprehensive unit tests with **Pytest** and **Moto**, local emulation with the **AWS SAM CLI**, and advanced cloud reliability patterns including **Structured Error Envelopes**, **Dead-Letter Queues (DLQ)**, **Lambda Destinations**, **Exponential Backoff with Jitter**, and the **Circuit Breaker Pattern**.
 
@@ -309,3 +309,9 @@ cdk destroy ProductApiStack
 # Confirm stack removal
 aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE
 ```
+
+---
+
+## ⏭️ Next Step
+
+Proceed to **[Module 06: Scaling with Data Storage](../06_scaling_with_data_storage/README.md)** to learn how to add Amazon Simple Storage Service (Amazon S3) for file storage and Amazon ElastiCache for performance optimization.
