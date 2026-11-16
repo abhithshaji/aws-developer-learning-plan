@@ -38,6 +38,8 @@ class InsufficientInventoryError(PermanentError):
 def retry_with_exponential_backoff(max_retries=3, base_delay=1, max_delay=60):
     """Decorator for implementing exponential backoff retry logic with jitter."""
     def decorator(func):
+        func_name = getattr(func, '__name__', str(func))
+
         @wraps(func)
         def wrapper(*args, **kwargs):
             for attempt in range(max_retries + 1):
@@ -46,7 +48,7 @@ def retry_with_exponential_backoff(max_retries=3, base_delay=1, max_delay=60):
                 
                 except RetryableError as e:
                     if attempt == max_retries:
-                        logger.error(f"Max retries ({max_retries}) exceeded for {func.__name__}")
+                        logger.error(f"Max retries ({max_retries}) exceeded for {func_name}")
                         raise e
                     
                     # Calculate delay with exponential backoff and jitter (full jitter)
@@ -55,12 +57,12 @@ def retry_with_exponential_backoff(max_retries=3, base_delay=1, max_delay=60):
                     total_delay = delay + jitter
                     
                     logger.warning(
-                        f"Attempt {attempt + 1} failed for {func.__name__}, retrying in {total_delay:.2f}s"
+                        f"Attempt {attempt + 1} failed for {func_name}, retrying in {total_delay:.2f}s"
                     )
                     time.sleep(total_delay)
                 
                 except PermanentError as e:
-                    logger.error(f"Permanent error in {func.__name__}: {str(e)}")
+                    logger.error(f"Permanent error in {func_name}: {str(e)}")
                     raise e
             
         return wrapper

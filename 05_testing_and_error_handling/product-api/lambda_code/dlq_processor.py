@@ -11,7 +11,7 @@ def analyze_failure(failed_event):
     error_message = failed_event.get('errorMessage', '')
     
     # Classify error types
-    if 'timeout' in error_message.lower():
+    if 'timeout' in error_message.lower() or 'timed out' in error_message.lower():
         return {'retryable': True, 'reason': 'timeout', 'delay': 300}
     
     elif 'rate limit' in error_message.lower():
