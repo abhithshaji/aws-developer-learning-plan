@@ -32,7 +32,8 @@ class TestProductErrorHandling(unittest.TestCase):
         
         body = json.loads(response['body'])
         self.assertIn('error', body)
-        self.assertIn('Product not found', body['error'])
+        self.assertEqual(body['error']['type'], 'product_not_found')
+        self.assertIn('is not available', body['error']['message'])
 
     def test_missing_path_parameters(self):
         """Test handling of malformed requests."""
@@ -77,7 +78,9 @@ class TestProductErrorHandling(unittest.TestCase):
         
         body = json.loads(response['body'])
         self.assertIn('error', body)
-        self.assertIn('Validation failed', body['error'])
+        self.assertEqual(body['error']['type'], 'validation_error')
+        self.assertIn('Product data validation failed', body['error']['message'])
+        self.assertIn('details', body['error'])
 
         
         # Verify database was not called with invalid data
