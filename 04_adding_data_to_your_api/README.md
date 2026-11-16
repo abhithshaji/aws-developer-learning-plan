@@ -37,8 +37,8 @@ cd product-api
 source .venv/bin/activate                 # macOS/Linux
 # .venv\Scripts\Activate.ps1             # Windows PowerShell
 
-# Install Pydantic for local development & validation
-pip install pydantic
+# Install requirements.txt libs
+pip install -r requirements.txt
 ```
 
 Ensure `pydantic>=2.0.0` is present in your `requirements.txt`:
@@ -204,3 +204,9 @@ cdk destroy ProductApiStack
 # Verify stack deletion status
 aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE
 ```
+
+---
+
+## ⏭️ Next Step
+
+Proceed to **[Module 05: Testing and Error Handling](../05_testing_and_error_handling/README.md)**, where we introduce a complete testing strategy and production-grade resilience patterns to our serverless product API.

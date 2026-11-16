@@ -10,6 +10,18 @@ A structured, module-by-module code reference guide for developers progressing t
 
 ---
 
+> [!IMPORTANT]
+> **Always read each module's `README.md` first before checking or running the code!**  
+> Each module folder contains its own comprehensive `README.md` detailing:
+> - **Prerequisites & new packages** that must be installed.
+> - **Summary of changes** made when moving from the previous module.
+> - **Exact file layouts and configurations** (Lambda layers, environment variables, permissions).
+> - **Step-by-step testing and deployment commands** (unit tests, coverage, and SAM CLI local emulation).
+>
+> Jumping straight into the code without reading the corresponding module documentation will likely cause missing dependency errors or confusion about incremental architectural refactorings.
+
+---
+
 ## 📌 Table of Contents
 
 - [About This Repository](#-about-this-repository)
@@ -60,14 +72,15 @@ To maximize your learning experience, we recommend following this workflow:
     [1. Learn on AWS Skill Builder] --> [2. Build & Code Locally]
     Does it deploy & work?
         Yes --> [3. Proceed to Next Module]
-        Stuck / Errors --> [4. Consult This Repo's Module Folder]
-    [5. Check Directory Layout & File Differences]
+        Stuck / Errors --> [4. Read Module's README.md & Consult Folder]
+    [5. Check Directory Layout, Dependencies & File Differences]
 ```
 
 1. **Follow the Skill Builder Course First**: Go through the theory and instructions on AWS Skill Builder and write and deploy the code in your own AWS development environment.
-2. **Use as a Reference, Not a Shortcut**: When you get stuck, encounter syntax or import errors, or wonder how to organize files, open the corresponding module directory here (e.g., `03_building_your_first_serverless_api/`).
-3. **Compare File Structures**: Verify your directory layout against the module's structure, paying close attention to CDK stack definitions (`product_api/`) and Lambda function code (`lambda_code/`).
-4. **Cross-Check with Official Sample Code**: Use the [official AWS repo](https://github.com/aws-samples/sample-aws-developer-project) as an additional reference for overarching architectural patterns and final states.
+2. **Read the Module README**: Always open the module's `README.md` first to understand the architectural diff, required libraries, and layer setup.
+3. **Use as a Reference, Not a Shortcut**: When you get stuck, encounter syntax or import errors, or wonder how to organize files, open the corresponding module directory here (e.g., `05_testing_and_error_handling/`).
+4. **Compare File Structures**: Verify your directory layout against the module's structure, paying close attention to CDK stack definitions (`product_api/`), shared utilities (`utils/`), and Lambda function code (`lambda_code/`).
+5. **Cross-Check with Official Sample Code**: Use the [official AWS repo](https://github.com/aws-samples/sample-aws-developer-project) as an additional reference for overarching architectural patterns and final states.
 
 ---
 
@@ -77,23 +90,25 @@ Each folder represents an individual milestone in the learning plan:
 
 ```text
 aws-developer-learning-plan/
-├── 01_introduction_to_aws_developer_learning_plan/   
-├── 02_introduction_to_being_an_aws_developer/        
-├── 03_building_your_first_serverless_api/
-├── ... 
-├── ...            
-└── README.md                                  
+├── 01_introduction_to_aws_developer_learning_plan/   # Environment setup, CLI verification & resource provisioning
+├── 02_introduction_to_being_an_aws_developer/        # AWS naming conventions, partition considerations & namespacing
+├── 03_building_your_first_serverless_api/            # Initial CDK project setup, Lambda & API Gateway
+├── 04_adding_data_to_your_api/                       # DynamoDB integration, Pydantic validation & Lambda layers
+├── 05_testing_and_error_handling/                    # Unit testing (Pytest/Moto), DLQ, Retries, Circuit Breaker & SAM CLI
+├── ...                                               # Upcoming modules
+└── README.md                                         # Main documentation & companion guide
 ```
 
 ### Module Breakdown
 
 | Module | Topic / Focus | Key Concepts & AWS Services | Status |
 |---|---|---|:---:|
-| **01** | [Introduction to AWS Developer Learning Plan](./01_introduction_to_aws_developer_learning_plan) | establishing essential AWS concepts and configuring your development environment | ✅ Complete |
-| **02** | [Introduction to Being an AWS Developer](./02_introduction_to_being_an_aws_developer) | evaluate compute options and understand your role as an AWS developer | ✅ Complete |
-| **03** | [Building Your First Serverless API](./03_building_your_first_serverless_api) | build and deploy a working REST API using AWS Lambda and Amazon API Gateway | ✅ Complete |
-| **04** | [Adding Data to Your API](./04_adding_data_to_your_api) | integrate Amazon DynamoDB with your Lambda functions | ✅ Complete |
-| **05+** | *Upcoming Modules* | Data access, SQS/SNS messaging, Cognito authentication, CI/CD, Observability | ⏳ Planned |
+| **01** | [Introduction to AWS Developer Learning Plan](./01_introduction_to_aws_developer_learning_plan) | Establishing essential AWS concepts and configuring your development environment | ✅ Complete |
+| **02** | [Introduction to Being an AWS Developer](./02_introduction_to_being_an_aws_developer) | Evaluate compute options and understand your role as an AWS developer | ✅ Complete |
+| **03** | [Building Your First Serverless API](./03_building_your_first_serverless_api) | Build and deploy a working REST API using AWS Lambda and Amazon API Gateway | ✅ Complete |
+| **04** | [Adding Data to Your API](./04_adding_data_to_your_api) | Integrate Amazon DynamoDB, Pydantic request validation, and Lambda layers | ✅ Complete |
+| **05** | [Testing and Error Handling](./05_testing_and_error_handling) | Automated unit testing (Pytest/Moto), Dead-Letter Queues (DLQ), Lambda Destinations, Exponential Backoff, Circuit Breakers, and SAM CLI local testing | ✅ Complete |
+| **06+** | *Upcoming Modules* | Data modeling & access patterns, messaging (SQS/SNS), Cognito authentication, CI/CD pipelines, Observability | ⏳ Planned |
 
 ---
 
