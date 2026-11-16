@@ -3,13 +3,20 @@ import boto3
 import boto3.dynamodb.conditions
 import uuid
 from datetime import datetime, timezone
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, BotoCoreError
+from utils.retry_utils import retry_with_exponential_backoff, RetryableError
 
 table = boto3.resource('dynamodb').Table('Products')
 
+# Decorate get_product with 2 retries and short delay
+@retry_with_exponential_backoff(max_retries=2, base_delay=0.5, max_delay=3)
 def get_product(product_id):
-    """Retrieve a single product by ID"""
-    return table.get_item(Key={'id': product_id}).get('Item')
+    """Retrieve a single product by ID with retry logic."""
+    try:
+        return table.get_item(Key={'id': product_id}).get('Item')
+    except (ClientError, BotoCoreError) as e:
+        # Wrap transient AWS connection/throttling errors as RetryableError
+        raise RetryableError(f"DynamoDB error reading product: {str(e)}")
 
 def get_all_products():
     """Retrieve all products from the table"""
