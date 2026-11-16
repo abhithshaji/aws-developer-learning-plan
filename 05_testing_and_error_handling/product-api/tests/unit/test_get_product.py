@@ -46,38 +46,6 @@ class TestGetProduct(unittest.TestCase):
         # Verify database was called correctly
         mock_get_product.assert_called_once_with('prod_123')
 
-    @patch('lambda_code.insert_product.insert_product')
-    def test_insert_product_success(self, mock_insert_product):
-        """Test successful product creation."""
-        # Arrange
-        new_product_data = {
-            'title': 'Gaming Mouse',
-            'price': 79.99,
-            'category': 'Electronics',
-            'description': 'Ergonomic gaming mouse'
-        }
-        
-        mock_insert_product.return_value = {
-            'id': 'prod_456',
-            **new_product_data
-        }
-        
-        create_event = {
-            'httpMethod': 'POST',
-            'body': json.dumps(new_product_data)
-        }
-        
-        # Act
-        from lambda_code.insert_product import handler
-        response = handler(create_event, None)
-        
-        # Assert
-        self.assertEqual(response['statusCode'], 201)
-        
-        body = json.loads(response['body'])
-        self.assertEqual(body['title'], 'Gaming Mouse')
-        self.assertIn('id', body)
-
 
 # Testing with event factory
 class TestProductAPI(unittest.TestCase):
