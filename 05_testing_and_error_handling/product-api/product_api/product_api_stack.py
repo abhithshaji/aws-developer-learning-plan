@@ -1,5 +1,6 @@
 from aws_cdk import aws_dynamodb
 from aws_cdk import CfnOutput, Stack, aws_lambda, aws_apigateway as apigw
+from aws_cdk import aws_sqs as sqs, Duration
 
 class ProductApiStack(Stack):
     def __init__(self, scope, construct_id, **kwargs):
@@ -33,6 +34,14 @@ class ProductApiStack(Stack):
             description="Layer containing Pydantic"
         )
 
+        # Create Dead-Letter Queue
+        self.dlq = sqs.Queue(
+            self, "ProductApiDLQ",
+            queue_name="product-api-dlq",
+            retention_period=Duration.days(14),
+            visibility_timeout=Duration.minutes(5)
+        )
+
         # Create Lambda functions pointing to your handler code
         self.get_product = aws_lambda.Function(
             self, "GetProduct",
@@ -55,7 +64,8 @@ class ProductApiStack(Stack):
             runtime=lambda_runtime,
             handler="lambda_code.insert_product.handler",
             code=code_location,
-            layers=[pydantic_layer]
+            layers=[pydantic_layer],
+            dead_letter_queue=self.dlq  #attaches DLQ
         )
         products_table.grant_read_write_data(self.insert_product)
 
