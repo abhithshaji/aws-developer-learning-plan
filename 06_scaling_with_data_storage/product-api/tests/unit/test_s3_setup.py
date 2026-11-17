@@ -11,7 +11,7 @@ import unittest
 import boto3
 from moto import mock_aws
 import utils.s3_setup
-from utils.s3_setup import create_product_images_bucket
+from utils.s3_setup import create_product_images_bucket, configure_s3_event_notification
 
 
 class TestS3Setup(unittest.TestCase):
@@ -62,6 +62,42 @@ class TestS3Setup(unittest.TestCase):
         # Verify bucket exists in region
         buckets = [b['Name'] for b in client.list_buckets().get('Buckets', [])]
         self.assertIn(bucket_name, buckets)
+
+    @mock_aws
+    def test_configure_s3_event_notification_success(self):
+        """Test configuring S3 event notification on object creation."""
+        client = boto3.client('s3', region_name='us-east-1')
+        bucket_name = "test-event-bucket"
+        client.create_bucket(Bucket=bucket_name)
+
+        lambda_arn = "arn:aws:lambda:us-east-1:123456789012:function:process-image"
+        
+        os.environ['PRODUCT_IMAGE_BUCKET'] = bucket_name
+        os.environ['LAMBDA_FUNCTION_ARN'] = lambda_arn
+
+        success = configure_s3_event_notification()
+        self.assertTrue(success)
+
+        # Verify notification configuration
+        notif = client.get_bucket_notification_configuration(Bucket=bucket_name)
+        self.assertIn('LambdaFunctionConfigurations', notif)
+        configs = notif['LambdaFunctionConfigurations']
+        self.assertEqual(len(configs), 1)
+        self.assertEqual(configs[0]['LambdaFunctionArn'], lambda_arn)
+        self.assertIn('s3:ObjectCreated:*', configs[0]['Events'])
+
+    def test_configure_s3_event_notification_missing_env(self):
+        """Test failure when required environment variables or arguments are missing."""
+        old_bucket = os.environ.pop('PRODUCT_IMAGE_BUCKET', None)
+        old_arn = os.environ.pop('LAMBDA_FUNCTION_ARN', None)
+        try:
+            success = configure_s3_event_notification()
+            self.assertFalse(success)
+        finally:
+            if old_bucket:
+                os.environ['PRODUCT_IMAGE_BUCKET'] = old_bucket
+            if old_arn:
+                os.environ['LAMBDA_FUNCTION_ARN'] = old_arn
 
 
 if __name__ == '__main__':
