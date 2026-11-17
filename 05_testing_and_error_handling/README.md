@@ -45,10 +45,12 @@ If you are coming from **Module 04**, here is what has been introduced in this m
 From the `product-api/` directory, activate your virtual environment and install test dependencies:
 
 ```sh
-cd product-api
+cd 05_testing_and_error_handling/product-api
+python3 -m venv .venv
 source .venv/bin/activate                 # macOS/Linux
 # .venv\Scripts\Activate.ps1             # Windows PowerShell
 
+pip install -r requirements.txt
 pip install -r requirements-dev.txt
 ```
 

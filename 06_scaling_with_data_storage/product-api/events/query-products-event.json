@@ -1,0 +1,13 @@
+{
+  "httpMethod": "GET",
+  "path": "/products",
+  "queryStringParameters": {
+    "category": "Electronics"
+  },
+  "pathParameters": null,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "body": null,
+  "isBase64Encoded": false
+}
