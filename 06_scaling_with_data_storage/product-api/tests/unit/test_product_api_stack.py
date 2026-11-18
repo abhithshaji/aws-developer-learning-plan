@@ -12,3 +12,15 @@ def test_sqs_queue_created():
         "VisibilityTimeout": 300,
         "MessageRetentionPeriod": 1209600
     })
+
+def test_s3_bucket_created():
+    """Verify CDK synthesizes the S3 Product Images Bucket with versioning."""
+    app = core.App()
+    stack = ProductApiStack(app, "product-api")
+    template = assertions.Template.from_stack(stack)
+
+    template.has_resource_properties("AWS::S3::Bucket", {
+        "VersioningConfiguration": {
+            "Status": "Enabled"
+        }
+    })
