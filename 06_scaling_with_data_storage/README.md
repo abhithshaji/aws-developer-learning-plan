@@ -44,7 +44,7 @@ If you are coming from **Module 05**, here is what has been introduced in this m
      - `POST /products/{id}/images`
 
 7. **Multi-Faceted Testing Strategy**:
-   - **49 Automated Unit Tests** with `pytest` and `moto[s3,dynamodb]`.
+   - **64 Automated Unit Tests** across 4 categorized suites (`api`, `storage`, `cache`, `resilience`) with `pytest`, `moto[s3,dynamodb]`, and mock Valkey clients.
    - **Local AWS SAM CLI Emulation** with active Docker integration (`sam local invoke`, `sam local start-api`).
    - **Live AWS Integration Script** (`scripts/test_live_services.py`) to verify real S3 uploads and DynamoDB updates against live AWS infrastructure.
 
@@ -103,7 +103,8 @@ If you are coming from **Module 05**, here is what has been introduced in this m
 ├── db/                                # Persistence & Data Layer
 │   ├── __init__.py
 │   ├── product_schema.py              # Pydantic request validation models
-│   └── products_db.py                 # DynamoDB CRUD operations with exponential backoff
+│   ├── products_db.py                 # DynamoDB CRUD operations with exponential backoff
+│   └── cache_db.py                    # Valkey / Redis caching layer (Cache-Aside, GSI caching, invalidation)
 ├── utils/                             # Shared Resilience & Infrastructure Helpers
 │   ├── __init__.py
 │   ├── response_utils.py              # Standardized API Gateway JSON response helpers
@@ -111,7 +112,8 @@ If you are coming from **Module 05**, here is what has been introduced in this m
 │   ├── circuit_breaker.py             # Circuit breaker state machine & CloudWatch reporting
 │   ├── dlq_setup.py                   # SQS Dead-Letter Queue helper
 │   ├── destinations_setup.py          # Lambda Destinations helper
-│   └── s3_setup.py                    # S3 bucket provisioning & event notification setup
+│   ├── s3_setup.py                    # S3 bucket provisioning & event notification setup
+│   └── elasticache_setup.py           # Amazon ElastiCache / Valkey cluster provisioning helper
 ├── lambda_code/                       # Lambda Function Handlers
 │   ├── __init__.py
 │   ├── get_product.py                 # GET /products/{id}
@@ -139,22 +141,32 @@ If you are coming from **Module 05**, here is what has been introduced in this m
 └── tests/                             # Comprehensive Unit Test Suite
     ├── __init__.py
     ├── event_factory.py               # Standardized APIGatewayEventFactory
-    └── unit/
+    └── unit/                          # Domain-Categorized Unit Tests
         ├── __init__.py
-        ├── test_product_api_stack.py  # CDK assertions (SQS DLQ & S3 Bucket properties)
-        ├── test_products_db.py        # DynamoDB mock operations (Moto)
-        ├── test_product_validation.py # Pydantic model validation tests
-        ├── test_get_product.py        # GET product handler tests
-        ├── test_insert_product.py     # POST product handler tests
-        ├── test_error_handling.py     # Error formatting & contextual error handling
-        ├── test_retry_utils.py        # Exponential backoff & retry policy manager tests
-        ├── test_circuit_breaker.py    # Circuit breaker CLOSED/OPEN/HALF_OPEN transitions
-        ├── test_dlq_processor.py      # Failure classification & retryability tests
-        ├── test_s3_setup.py           # S3 bucket creation & event notification tests
-        ├── test_generate_presigned_url.py # Presigned PUT URL generation tests
-        ├── test_generate_download_url.py  # Presigned GET URL generation tests
-        ├── test_update_product_images.py  # DynamoDB image_urls list appending tests
-        └── test_process_image_upload.py   # S3 event notification metadata processor tests
+        ├── api/                       # Core API & DynamoDB tests
+        │   ├── __init__.py
+        │   ├── test_product_api_stack.py
+        │   ├── test_products_db.py
+        │   ├── test_product_validation.py
+        │   ├── test_get_product.py
+        │   ├── test_insert_product.py
+        │   └── test_error_handling.py
+        ├── storage/                   # S3 Storage & Image Processing tests
+        │   ├── __init__.py
+        │   ├── test_s3_setup.py
+        │   ├── test_generate_presigned_url.py
+        │   ├── test_generate_download_url.py
+        │   ├── test_update_product_images.py
+        │   └── test_process_image_upload.py
+        ├── cache/                     # ElastiCache / Valkey Caching tests
+        │   ├── __init__.py
+        │   ├── test_elasticache_setup.py
+        │   └── test_cache_db.py
+        └── resilience/                # Fault Tolerance & Resilience tests
+            ├── __init__.py
+            ├── test_circuit_breaker.py
+            ├── test_retry_utils.py
+            └── test_dlq_processor.py
 ```
 
 ---
@@ -202,30 +214,39 @@ pip install \
 
 ## 🧪 Running Unit Tests
 
-We use **Pytest** with **Moto** to mock DynamoDB and S3 calls locally with zero cloud dependencies:
+We use **Pytest** with **Moto** and `unittest.mock` to test DynamoDB, S3, and ElastiCache/Valkey logic locally with zero cloud dependencies. Unit tests are organized into domain-specific subdirectories under `tests/unit/`:
 
 ```sh
+# Run the entire test suite (64 tests across all domains)
 pytest tests/unit/ -v
+
+# Or run tests for a specific domain:
+pytest tests/unit/api/ -v          # Core REST API & DynamoDB tests
+pytest tests/unit/storage/ -v      # S3 storage & image processing tests
+pytest tests/unit/cache/ -v        # ElastiCache / Valkey caching tests
+pytest tests/unit/resilience/ -v   # Circuit breaker, retry & DLQ tests
 ```
 
-### Test Suite Coverage (49 Passing Tests)
+### Test Suite Coverage (64 Passing Tests)
 
-| Test Module | Coverage Area | Status |
-| :--- | :--- | :--- |
-| `test_product_api_stack.py` | CDK CloudFormation properties: SQS DLQ & Versioned S3 Bucket | **Passed** |
-| `test_s3_setup.py` | Bucket creation, Versioning, Public Access Blocks, Multi-Region, S3 Notifications | **Passed** |
-| `test_generate_presigned_url.py` | Presigned PUT URL generation, SigV4 virtual addressing, key partitioning | **Passed** |
-| `test_generate_download_url.py` | Presigned GET URL generation, 1-hour expiration, error handling | **Passed** |
-| `test_update_product_images.py` | Atomic DynamoDB `list_append` expressions, URL resolution, validation | **Passed** |
-| `test_process_image_upload.py` | S3 event notification parsing, `head_object` metadata extraction, DynamoDB updates | **Passed** |
-| `test_circuit_breaker.py` | Circuit breaker 3-state state machine (`CLOSED` → `OPEN` → `HALF_OPEN`) | **Passed** |
-| `test_retry_utils.py` | Exponential backoff, full jitter, `RetryPolicyManager` rules | **Passed** |
-| `test_dlq_processor.py` | Asynchronous DLQ message triage, timeout/rate-limit classification | **Passed** |
-| `test_products_db.py` | Mock DynamoDB table CRUD & GSI queries | **Passed** |
-| `test_product_validation.py` | Pydantic schema validation & boundary constraints | **Passed** |
-| `test_get_product.py` | Retrieval endpoints with mock factory events | **Passed** |
-| `test_insert_product.py` | Product creation with Pydantic layer validation | **Passed** |
-| `test_error_handling.py` | Structured error envelopes, HTTP 400/404/500 validation, contextual recommendations | **Passed** |
+| Subfolder | Test Module | Coverage Area | Status |
+| :--- | :--- | :--- | :--- |
+| **`tests/unit/api/`** | `test_product_api_stack.py` | CDK CloudFormation properties: SQS DLQ & Versioned S3 Bucket | **Passed** |
+| | `test_products_db.py` | Mock DynamoDB table CRUD & query operations | **Passed** |
+| | `test_product_validation.py` | Pydantic schema validation & boundary constraints | **Passed** |
+| | `test_get_product.py` | Retrieval endpoints with mock factory events | **Passed** |
+| | `test_insert_product.py` | Product creation with Pydantic layer validation | **Passed** |
+| | `test_error_handling.py` | Structured error envelopes, HTTP 400/404/500 validation, contextual recommendations | **Passed** |
+| **`tests/unit/storage/`** | `test_s3_setup.py` | Bucket creation, Versioning, Public Access Blocks, Multi-Region, S3 Notifications | **Passed** |
+| | `test_generate_presigned_url.py` | Presigned PUT URL generation, SigV4 virtual addressing, key partitioning | **Passed** |
+| | `test_generate_download_url.py` | Presigned GET URL generation, 1-hour expiration, error handling | **Passed** |
+| | `test_update_product_images.py` | Atomic DynamoDB `list_append` expressions, URL resolution, validation | **Passed** |
+| | `test_process_image_upload.py` | S3 event notification parsing, `head_object` metadata extraction, DynamoDB updates | **Passed** |
+| **`tests/unit/cache/`** | `test_elasticache_setup.py` | ElastiCache cluster provisioning (Valkey & Memcached) & error handling | **Passed** |
+| | `test_cache_db.py` | Cache-Aside retrieval, GSI query caching, cache invalidation, TTL strategies, metrics | **Passed** |
+| **`tests/unit/resilience/`** | `test_circuit_breaker.py` | Circuit breaker 3-state state machine (`CLOSED` → `OPEN` → `HALF_OPEN`) | **Passed** |
+| | `test_retry_utils.py` | Exponential backoff, full jitter, `RetryPolicyManager` rules | **Passed** |
+| | `test_dlq_processor.py` | Asynchronous DLQ message triage, timeout/rate-limit classification | **Passed** |
 
 ---
 
