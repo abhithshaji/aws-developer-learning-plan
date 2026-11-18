@@ -1,48 +1,168 @@
 # 📦 Module 06: Scaling with Data Storage
 
-In this module, we introduce a complete testing strategy and production-grade resilience patterns to our serverless product API. We implement comprehensive unit tests with **Pytest** and **Moto**, local emulation with the **AWS SAM CLI**, and advanced cloud reliability patterns including **Structured Error Envelopes**, **Dead-Letter Queues (DLQ)**, **Lambda Destinations**, **Exponential Backoff with Jitter**, and the **Circuit Breaker Pattern**.
+> [!NOTE]
+> **Module In Progress**: This module is actively being developed. This guide documents everything implemented and verified through the **Amazon S3 Object Storage**, **Presigned URLs**, **Atomic DynamoDB Media Linking**, and **Event-Driven Lambda Processing** milestones.
+
+In this module, we scale our serverless microservice beyond tabular database records to handle unstructured media storage using **Amazon Simple Storage Service (Amazon S3)**. We implement secure client-to-storage upload and download patterns using **S3 Presigned URLs**, link media metadata to DynamoDB records using atomic update expressions, and establish asynchronous, event-driven workflows using **S3 Event Notifications** and **AWS Lambda triggers**.
 
 ---
 
-## 📌 Summary of Changes from Module 04
+## 📌 Summary of Changes from Module 05
 
-If you are coming from **Module 04**, here is what has been introduced in this module:
+If you are coming from **Module 05**, here is what has been introduced in this module:
 
-1. **Automated Unit Testing & Mocking**:
-   - Added `pytest`, `pytest-cov`, and `moto[dynamodb]` to `requirements-dev.txt`.
-   - Implemented an `APIGatewayEventFactory` (`tests/event_factory.py`) to generate standardized proxy events with minimal boilerplate.
-   - Isolated Lambda handler tests from live AWS calls using Python's `unittest.mock` (`@patch`).
-   - Simulated real DynamoDB tables locally without hitting AWS using **Moto**.
-   - Added CDK infrastructure assertions in `test_product_api_stack.py` to test CloudFormation resource definitions.
+1. **Amazon S3 Bucket Provisioning (`utils/s3_setup.py`, `product_api_stack.py`)**:
+   - Provisioned an S3 bucket (`ProductImagesBucket`) with **Object Versioning** enabled to safeguard against accidental overwrites.
+   - Enforced modern security best practices with **Public Access Block** (`BlockPublicAcls`, `IgnorePublicAcls`, while allowing controlled bucket policies).
+   - Added **CORS Rules** to allow browser and client applications to execute direct `GET`, `PUT`, and `POST` operations against S3.
+   - Handled regional endpoint nuances (e.g., omitting `LocationConstraint` for `us-east-1` while applying it to regional endpoints like `ap-southeast-2`).
 
-2. **Standardized & Contextual Error Handling (`utils/response_utils.py`)**:
-   - Created structured error payloads containing error `type`, `message`, `timestamp`, `request_id`, `details`, and actionable `suggestions`.
-   - Built `ContextualErrorHandler` to dynamically enrich 404 responses with recommendations based on user search queries or categories.
+2. **Secure Direct Uploads via Presigned PUT URLs (`lambda_code/generate_presigned_url.py`)**:
+   - Enabled clients to upload media directly to S3 without routing heavy binary payloads through API Gateway or Lambda execution memory (bypassing Lambda payload and timeout limits).
+   - Configured SigV4 virtual-host addressing and partitioned object keys predictably: `products/{product_id}/{image_type}.jpg`.
+   - Constrained uploads to `image/jpeg` with temporary 1-hour expiration tokens (`ExpiresIn=3600`).
 
-3. **Dead-Letter Queues (DLQ)**:
-   - Defined an SQS Dead-Letter Queue (`ProductApiDLQ`) in CDK and attached it to asynchronous Lambda invocations (`dead_letter_queue=self.dlq`).
-   - Implemented `dlq_processor.py` to parse, classify, and triage failed invocations (`timeout`, `rate_limit`, `validation_error`).
+3. **Secure Temporary Downloads via Presigned GET URLs (`lambda_code/generate_download_url.py`)**:
+   - Implemented temporary download URL generation for private product images, granting time-limited read access without exposing the bucket publicly.
 
-4. **Lambda Destinations (`destinations_setup.py`, `destinations_handlers.py`)**:
-   - Demonstrated routing successful and failed asynchronous Lambda executions to target SQS queues without adding custom publishing code in function handlers.
-   - Built compensation logic (`inventory_rollback_handler`) for transactional rollbacks.
+4. **Atomic DynamoDB Media Metadata Linking (`lambda_code/update_product_images.py`)**:
+   - Exposed an endpoint for clients to explicitly register uploaded image keys.
+   - Leveraged DynamoDB's `list_append(if_not_exists(image_urls, :empty_list), :new_image)` update expression to atomically append URLs to the `image_urls` list attribute without overwriting existing entries or item attributes.
 
-5. **Retry Strategies (`utils/retry_utils.py`)**:
-   - Implemented an `@retry_with_exponential_backoff` decorator featuring full jitter to prevent thundering herd problems.
-   - Created `RetryPolicyManager` for operation-specific retry limits and error classifications.
+5. **Asynchronous Event-Driven Processing via S3 Event Notifications (`lambda_code/process_image_upload.py`, `utils/s3_setup.py`)**:
+   - Configured S3 bucket event notifications for `s3:ObjectCreated:*` filtered to prefix `products/` and suffix `.jpg`.
+   - Created an event-driven Lambda processor that reacts immediately to image creations.
+   - Used `s3.head_object()` to read file size and content type metadata directly from S3 headers without pulling the binary image file into Lambda RAM.
+   - Updated the corresponding DynamoDB record with `image_url`, `file_size`, and `upload_date`.
 
-6. **Circuit Breaker Pattern (`utils/circuit_breaker.py`)**:
-   - Implemented a 3-state state machine (`CLOSED` → `OPEN` → `HALF_OPEN`) to protect downstream dependencies from cascading failures, with CloudWatch metric reporting.
+6. **AWS CDK Infrastructure Expansion (`product_api/product_api_stack.py`)**:
+   - Integrated `aws_s3.Bucket` and `aws_s3_notifications.LambdaDestination`.
+   - Wired 4 new Lambda functions with fine-grained IAM grants (`grant_put`, `grant_read`, `grant_read_write_data`).
+   - Added RESTful API Gateway resources and CORS options:
+     - `GET /products/{id}/image-upload-url`
+     - `GET /products/{id}/image-download-url`
+     - `POST /products/{id}/images`
 
-7. **Local Emulation via AWS SAM CLI (`events/`)**:
-   - Configured SAM CLI to consume CDK-synthesized templates (`cdk.out/ProductApiStack.template.json`) for local Lambda invocation and API Gateway HTTP emulation (`localhost:3000`).
+7. **Multi-Faceted Testing Strategy**:
+   - **49 Automated Unit Tests** with `pytest` and `moto[s3,dynamodb]`.
+   - **Local AWS SAM CLI Emulation** with active Docker integration (`sam local invoke`, `sam local start-api`).
+   - **Live AWS Integration Script** (`scripts/test_live_services.py`) to verify real S3 uploads and DynamoDB updates against live AWS infrastructure.
+
+---
+
+## 🏛️ Architecture & Media Processing Flow
+
+```
+                                DIRECT CLIENT-TO-S3 FLOW
+                                
+   1. GET /products/{id}/image-upload-url
+  ┌─────────────────────────────────────────────────────────────┐
+  │                                                             │
+  ▼                                                             ▼
+┌──────────────┐         2. Presigned PUT URL           ┌──────────────┐
+│    Client    │ ◄───────────────────────────────────── │ API Gateway  │
+└──────┬───────┘                                        └──────┬───────┘
+       │                                                       │
+       │ 3. Direct HTTP PUT (image binary)                     ▼
+       │    [Bypasses API Gateway/Lambda limits]        ┌──────────────┐
+       ▼                                                │    Lambda    │
+┌──────────────┐                                        │(GenerateURL) │
+│  Amazon S3   │                                        └──────────────┘
+│ ProductImages│
+└──────┬───────┘
+       │
+       │ 4. s3:ObjectCreated:* (prefix: products/, suffix: .jpg)
+       ▼
+┌──────────────┐         5. s3.head_object()            ┌──────────────┐
+│  S3 Trigger  │ ─────────────────────────────────────► │  Amazon S3   │
+│  (Event Notif│                                        └──────────────┘
+│   Processor) │
+└──────┬───────┘
+       │ 6. Update item: image_url, file_size, upload_date
+       ▼
+┌──────────────┐
+│AmazonDynamoDB│
+│ (Products)   │
+└──────────────┘
+```
+
+---
+
+## 📂 Project Structure
+
+```text
+06_scaling_with_data_storage/product-api/
+├── cdk.json                           # CDK application configuration
+├── requirements.txt                   # Production dependencies (aws-cdk, pydantic)
+├── requirements-dev.txt               # Testing dependencies (pytest, moto[s3,dynamodb])
+├── layers/                            # Binary layer assets
+│   └── pydantic/python/               # Compiled Pydantic C-extensions for Python 3.13
+├── product_api/                       # CDK Infrastructure Stack
+│   ├── __init__.py
+│   └── product_api_stack.py           # S3 Bucket, DynamoDB, SQS DLQ, Lambdas & API Gateway
+├── db/                                # Persistence & Data Layer
+│   ├── __init__.py
+│   ├── product_schema.py              # Pydantic request validation models
+│   └── products_db.py                 # DynamoDB CRUD operations with exponential backoff
+├── utils/                             # Shared Resilience & Infrastructure Helpers
+│   ├── __init__.py
+│   ├── response_utils.py              # Standardized API Gateway JSON response helpers
+│   ├── retry_utils.py                 # Exponential backoff decorator with full jitter
+│   ├── circuit_breaker.py             # Circuit breaker state machine & CloudWatch reporting
+│   ├── dlq_setup.py                   # SQS Dead-Letter Queue helper
+│   ├── destinations_setup.py          # Lambda Destinations helper
+│   └── s3_setup.py                    # S3 bucket provisioning & event notification setup
+├── lambda_code/                       # Lambda Function Handlers
+│   ├── __init__.py
+│   ├── get_product.py                 # GET /products/{id}
+│   ├── insert_product.py              # POST /products (DLQ-attached)
+│   ├── query_products.py              # GET /products (Category GSI query)
+│   ├── update_product.py              # PUT /products/{id}
+│   ├── options.py                     # CORS preflight handler
+│   ├── dlq_processor.py               # DLQ failure classifier & processor
+│   ├── destinations_handlers.py       # Asynchronous success/failure destination handlers
+│   ├── generate_presigned_url.py      # GET /products/{id}/image-upload-url (S3 PUT url)
+│   ├── generate_download_url.py       # GET /products/{id}/image-download-url (S3 GET url)
+│   ├── update_product_images.py       # POST /products/{id}/images (DynamoDB list_append)
+│   └── process_image_upload.py        # S3 ObjectCreated event consumer (head_object metadata)
+├── events/                            # Mock Event Payloads for Local SAM Testing
+│   ├── get-product-event.json
+│   ├── insert-product-event.json
+│   ├── query-products-event.json
+│   ├── image-upload-url-event.json    # GET /products/prod_001/image-upload-url event
+│   ├── image-download-url-event.json  # GET /products/prod_001/image-download-url event
+│   ├── update-product-images-event.json # POST /products/prod_001/images event
+│   └── s3-image-upload-event.json     # S3 ObjectCreated mock event
+├── scripts/
+│   ├── init.sh
+│   └── test_live_services.py          # Integration test runner against real AWS services
+└── tests/                             # Comprehensive Unit Test Suite
+    ├── __init__.py
+    ├── event_factory.py               # Standardized APIGatewayEventFactory
+    └── unit/
+        ├── __init__.py
+        ├── test_product_api_stack.py  # CDK assertions (SQS DLQ & S3 Bucket properties)
+        ├── test_products_db.py        # DynamoDB mock operations (Moto)
+        ├── test_product_validation.py # Pydantic model validation tests
+        ├── test_get_product.py        # GET product handler tests
+        ├── test_insert_product.py     # POST product handler tests
+        ├── test_error_handling.py     # Error formatting & contextual error handling
+        ├── test_retry_utils.py        # Exponential backoff & retry policy manager tests
+        ├── test_circuit_breaker.py    # Circuit breaker CLOSED/OPEN/HALF_OPEN transitions
+        ├── test_dlq_processor.py      # Failure classification & retryability tests
+        ├── test_s3_setup.py           # S3 bucket creation & event notification tests
+        ├── test_generate_presigned_url.py # Presigned PUT URL generation tests
+        ├── test_generate_download_url.py  # Presigned GET URL generation tests
+        ├── test_update_product_images.py  # DynamoDB image_urls list appending tests
+        └── test_process_image_upload.py   # S3 event notification metadata processor tests
+```
 
 ---
 
 ## 🛠️ Installations & Setup
 
 ### 1. Development Dependencies
-From the `product-api/` directory, activate your virtual environment and install test dependencies:
+Activate the virtual environment and install project dependencies:
 
 ```sh
 cd 06_scaling_with_data_storage/product-api
@@ -54,18 +174,16 @@ pip install -r requirements.txt
 pip install -r requirements-dev.txt
 ```
 
-Your `requirements-dev.txt` should contain:
+Your `requirements-dev.txt` includes:
 ```text
 pytest~=8.3
 pytest-cov~=5.0
 moto[dynamodb]~=5.0
 boto3~=1.35
-flake8~=7.1
-mypy~=1.11
 ```
 
-### 2. Pydantic Lambda Layer (Prerequisite from Module 04)
-If you haven't built the Pydantic layer yet, build it targeting Amazon Linux (Python 3.13):
+### 2. Pydantic Lambda Layer
+If the layer binary directory is not yet built, package Pydantic for Amazon Linux / Python 3.13:
 
 ```sh
 mkdir -p layers/pydantic/python
@@ -79,241 +197,200 @@ pip install \
   --no-cache-dir \
   pydantic
 ```
----
-
-## 📂 Project Structure
-
-```text
-product-api/
-├── cdk.json
-├── requirements.txt                   # Production dependencies (aws-cdk, pydantic)
-├── requirements-dev.txt               # Testing dependencies (pytest, moto, boto3)
-├── .gitignore
-├── layers/                            # (Git-ignored) Lambda layer binary assets
-│   └── pydantic/python/
-├── product_api/                       # CDK Infrastructure Stack
-│   ├── __init__.py
-│   └── product_api_stack.py           # DynamoDB, DLQ, Lambdas, and API Gateway
-├── db/                                # Data Layer
-│   ├── __init__.py
-│   ├── product_schema.py              # Pydantic validation schemas
-│   └── products_db.py                 # DynamoDB Boto3 operations
-├── utils/                             # Shared Resilience & Utility Helpers
-│   ├── __init__.py
-│   ├── response_utils.py              # Success, error, & contextual error responses
-│   ├── retry_utils.py                 # Exponential backoff + RetryPolicyManager
-│   ├── circuit_breaker.py             # CircuitBreaker state machine & CloudWatch metrics
-│   ├── dlq_setup.py                   # SQS DLQ configuration helper
-│   └── destinations_setup.py          # Lambda Destinations configuration helper
-├── lambda_code/                       # Lambda Handlers
-│   ├── __init__.py
-│   ├── get_product.py                 # GET /products/{id} (Contextual error handling)
-│   ├── insert_product.py              # POST /products (Pydantic validation)
-│   ├── query_products.py              # GET /products (Category query via GSI)
-│   ├── update_product.py              # PUT /products/{id}
-│   ├── options.py                     # CORS preflight handler
-│   ├── dlq_processor.py               # DLQ SQS message consumer & failure analyzer
-│   └── destinations_handlers.py       # Success/failure destinations & rollback handler
-├── events/                            # SAM Local Mock Events
-│   ├── get-product-event.json         # Mock event for GET /products/{id}
-│   ├── insert-product-event.json       # Mock event for POST /products
-│   └── query-products-event.json      # Mock event for GET /products?category=...
-└── tests/                             # Comprehensive Test Suite
-    ├── __init__.py
-    ├── event_factory.py               # APIGatewayEventFactory helper
-    └── unit/
-        ├── __init__.py
-        ├── test_get_product.py        # GET endpoint unit tests
-        ├── test_insert_product.py     # POST endpoint unit tests
-        ├── test_product_validation.py # Pydantic schema validation tests
-        ├── test_products_db.py        # DynamoDB CRUD tests (Moto mock)
-        ├── test_error_handling.py     # Error responses & 400/404/500 validation
-        ├── test_retry_utils.py        # Backoff, jitter, & policy manager tests
-        ├── test_circuit_breaker.py    # Circuit breaker CLOSED/OPEN/HALF_OPEN tests
-        ├── test_dlq_processor.py      # Failure classification & retryability tests
-        └── test_product_api_stack.py  # CDK SQS assertions test
-```
 
 ---
 
-## 🧪 Running the Unit Tests
+## 🧪 Running Unit Tests
 
-> [!TIP]
-> When running tests that touch `boto3`, pass dummy AWS environment variables so `boto3` does not attempt to contact AWS STS or look for active SSO credentials.
+We use **Pytest** with **Moto** to mock DynamoDB and S3 calls locally with zero cloud dependencies:
 
-### Run All Unit Tests
 ```sh
-AWS_DEFAULT_REGION=us-east-1 AWS_ACCESS_KEY_ID=testing AWS_SECRET_ACCESS_KEY=testing \
-pytest tests/unit -v
+pytest tests/unit/ -v
 ```
 
-### Run Tests by Category
-```sh
-# 1. Endpoint & Handler Tests
-pytest tests/unit/test_get_product.py tests/unit/test_insert_product.py -v
+### Test Suite Coverage (49 Passing Tests)
 
-# 2. Pydantic Schema Validation Tests
-pytest tests/unit/test_product_validation.py -v
-
-# 3. Mock Database (Moto) Tests
-pytest tests/unit/test_products_db.py -v
-
-# 4. Error Handling & Structured Response Tests
-pytest tests/unit/test_error_handling.py -v
-
-# 5. Resilience Pattern Tests (Retries & Circuit Breaker)
-pytest tests/unit/test_retry_utils.py tests/unit/test_circuit_breaker.py -v
-
-# 6. DLQ Analyzer Tests
-pytest tests/unit/test_dlq_processor.py -v
-
-# 7. CDK Infrastructure Stack Assertions
-pytest tests/unit/test_product_api_stack.py -v
-```
-
-### Run with Code Coverage
-```sh
-AWS_DEFAULT_REGION=us-east-1 AWS_ACCESS_KEY_ID=testing AWS_SECRET_ACCESS_KEY=testing \
-pytest --cov=lambda_code --cov=utils --cov=db tests/unit/
-```
-
----
-
-## 🛡️ Resilience & Error Handling Architecture
-
-### 1. Structured & Contextual Errors (`utils/response_utils.py`)
-Instead of plain error strings, errors return structured dictionaries with machine-readable types, timestamps, request IDs, and actionable next steps:
-
-```json
-{
-  "error": {
-    "type": "product_not_found",
-    "message": "Product prod_999 is not available",
-    "timestamp": "2026-11-16T08:00:00+00:00",
-    "request_id": "c6b41d2e-0a56-43d2-8cc6-d61ec958fb00",
-    "suggestions": [
-      "Verify the product ID is correct",
-      "Try searching for 'wireless' to find similar products",
-      "Browse other products in Electronics category"
-    ]
-  }
-}
-```
-
-### 2. Exponential Backoff with Jitter (`utils/retry_utils.py`)
-Transient failures (network blips, DynamoDB throughput throttling) automatically retry with exponentially increasing intervals plus random jitter:
-
-$$\text{delay} = \min(\text{base\_delay} \times 2^{\text{attempt}}, \text{max\_delay}) + \text{jitter}$$
-
-- **`RetryableError`**: Transient exceptions (e.g., `DatabaseTimeoutError`, `RateLimitError`) undergo retries.
-- **`PermanentError`**: Fatal exceptions (e.g., `ProductNotFoundError`, invalid data) fail fast without retrying.
-
-### 3. Circuit Breaker Pattern (`utils/circuit_breaker.py`)
-Wraps downstream calls to prevent cascading system failures:
-- **`CLOSED`**: All traffic passes through normally.
-- **`OPEN`**: Tripped when failure threshold is exceeded. All subsequent requests fast-fail immediately with `CircuitBreakerOpenError`, shielding the downstream system.
-- **`HALF_OPEN`**: After the recovery timeout, allows trial requests. Successes reset to `CLOSED`; failures trip back to `OPEN`.
-
-### 4. Dead-Letter Queues & Destinations
-- **DLQ**: Configured in CDK on `InsertProduct` (`dead_letter_queue=self.dlq`) to capture asynchronous failed invocations.
-- **Analyzer**: `dlq_processor.analyze_failure()` parses error messages and classifies whether a failed event is safe to retry.
+| Test Module | Coverage Area | Status |
+| :--- | :--- | :--- |
+| `test_product_api_stack.py` | CDK CloudFormation properties: SQS DLQ & Versioned S3 Bucket | **Passed** |
+| `test_s3_setup.py` | Bucket creation, Versioning, Public Access Blocks, Multi-Region, S3 Notifications | **Passed** |
+| `test_generate_presigned_url.py` | Presigned PUT URL generation, SigV4 virtual addressing, key partitioning | **Passed** |
+| `test_generate_download_url.py` | Presigned GET URL generation, 1-hour expiration, error handling | **Passed** |
+| `test_update_product_images.py` | Atomic DynamoDB `list_append` expressions, URL resolution, validation | **Passed** |
+| `test_process_image_upload.py` | S3 event notification parsing, `head_object` metadata extraction, DynamoDB updates | **Passed** |
+| `test_circuit_breaker.py` | Circuit breaker 3-state state machine (`CLOSED` → `OPEN` → `HALF_OPEN`) | **Passed** |
+| `test_retry_utils.py` | Exponential backoff, full jitter, `RetryPolicyManager` rules | **Passed** |
+| `test_dlq_processor.py` | Asynchronous DLQ message triage, timeout/rate-limit classification | **Passed** |
+| `test_products_db.py` | Mock DynamoDB table CRUD & GSI queries | **Passed** |
+| `test_product_validation.py` | Pydantic schema validation & boundary constraints | **Passed** |
+| `test_get_product.py` | Retrieval endpoints with mock factory events | **Passed** |
+| `test_insert_product.py` | Product creation with Pydantic layer validation | **Passed** |
+| `test_error_handling.py` | Structured error envelopes, HTTP 400/404/500 validation, contextual recommendations | **Passed** |
 
 ---
 
 ## 💻 Local Testing with AWS SAM CLI
 
-The AWS SAM CLI allows you to execute your Lambda functions and emulate API Gateway locally using Docker.
+With Docker running, you can use the **AWS SAM CLI** (`v1.172.1`) to execute Lambda functions in local container environments matching production.
 
-### Prerequisites
-1. **Docker Desktop** installed and running.
-2. **AWS SAM CLI** installed: [Installation Guide](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html).
+### 1. Synthesize the CloudFormation Template
+Before running SAM commands, synthesize the CDK stack into `cdk.out/`:
 
-### 1. Synthesize the CDK Template
-Before running SAM commands, compile your CDK stack:
 ```sh
-cdk synth
+cdk synth ProductApiStack
 ```
-This generates `cdk.out/ProductApiStack.template.json`.
 
 ---
 
 ### 2. Invoke Individual Lambdas Locally
-Pass the synthesized template (`-t`) and a mock event (`-e`):
+Pass the synthesized template (`-t`) and a mock event payload (`-e`):
 
 ```sh
-# If testing against live AWS DynamoDB, ensure you are authenticated:
-aws login  # or aws sso login
-
-# Test GET /products/{id}
-sam local invoke GetProduct \
+# 1. Test generating a presigned upload URL
+sam local invoke GeneratePresignedUrl \
   -t cdk.out/ProductApiStack.template.json \
-  -e events/get-product-event.json
+  -e events/image-upload-url-event.json
 
-# Test POST /products
-sam local invoke InsertProduct \
+# 2. Test generating a presigned download URL
+sam local invoke GenerateDownloadUrl \
   -t cdk.out/ProductApiStack.template.json \
-  -e events/insert-product-event.json
+  -e events/image-download-url-event.json
 
-# Test GET /products?category=Electronics
-sam local invoke QueryProducts \
+# 3. Test linking an image URL to DynamoDB
+sam local invoke UpdateProductImages \
   -t cdk.out/ProductApiStack.template.json \
-  -e events/query-products-event.json
+  -e events/update-product-images-event.json
+
+# 4. Test S3 event notification processor
+sam local invoke ProcessImageUpload \
+  -t cdk.out/ProductApiStack.template.json \
+  -e events/s3-image-upload-event.json
 ```
-
-*(If testing offline without live AWS credentials, prefix the command with `AWS_DEFAULT_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test`).*
 
 ---
 
-### 3. Emulate the Full API Gateway Locally
-Start the local HTTP emulator on port `3000`:
+### 3. Emulate API Gateway Locally
+Spin up a local HTTP API server on port `3000`:
 
 ```sh
-sam local start-api -t cdk.out/ProductApiStack.template.json
+sam local start-api -t cdk.out/ProductApiStack.template.json -p 3000
 ```
 
-In a separate terminal, test your endpoints with `curl`:
+In a separate terminal, test the image routes:
 
 ```sh
-# 1. Create a product
-curl -X POST http://127.0.0.1:3000/products \
+# Request upload URL
+curl -s "http://127.0.0.1:3000/products/prod_001/image-upload-url" | jq .
+
+# Request download URL
+curl -s "http://127.0.0.1:3000/products/prod_001/image-download-url" | jq .
+
+# Link image to product
+curl -X POST "http://127.0.0.1:3000/products/prod_001/images" \
   -H "Content-Type: application/json" \
-  -d '{
-    "title": "Mechanical Keyboard",
-    "price": 129.99,
-    "category": "Electronics",
-    "description": "Hot-swappable mechanical gaming keyboard"
-  }'
-
-# 2. Query products by category
-curl "http://127.0.0.1:3000/products?category=Electronics"
-
-# 3. Fetch specific product
-curl http://127.0.0.1:3000/products/prod_001
-
-# 4 Fetch all products
-curl http://127.0.0.1:3000/products
+  -d '{"image_key": "products/prod_001/main.jpg"}' | jq .
 ```
 
 ---
 
-## 🚀 Cloud Deployment & Cleanup
+## ⚡ Direct Integration Script (Live AWS Services)
 
-### Deploy to AWS
+To verify the complete image pipeline directly against your live AWS S3 bucket and DynamoDB table (without needing API Gateway or Docker), run:
+
+```sh
+python3 scripts/test_live_services.py
+```
+
+**Automated Workflow Executed by Script:**
+1. Connects to your configured AWS Region (`ap-southeast-2`) and verifies the `Products` table.
+2. Creates or resolves your live S3 bucket (`create_product_images_bucket()`).
+3. Executes `generate_presigned_url` to obtain an authorized S3 PUT URL.
+4. Uploads a sample binary JPEG to S3 using standard HTTP PUT.
+5. Executes `generate_download_url` to obtain an authorized S3 GET URL.
+6. Executes `update_product_images` to atomically append the S3 URL to DynamoDB.
+7. Executes `process_image_upload` with a mock S3 event, verifying `head_object` metadata extraction.
+8. Queries DynamoDB and displays the updated product item with full image attributes.
+
+---
+
+## 🚀 Cloud Deployment & Verification (`cdk deploy`)
+
+### 1. Deploy Stack to AWS
+Deploy all resources to your AWS account:
+
 ```sh
 cdk deploy ProductApiStack
 ```
 
-### Cleanup
-When you conclude your practice session, destroy all resources to prevent unexpected costs:
-```sh
-cdk destroy ProductApiStack
+Upon completion, capture the output URLs:
+```text
+Outputs:
+ProductApiStack.ProductsApiUrl = https://<api-id>.execute-api.ap-southeast-2.amazonaws.com/dev/
+ProductApiStack.ProductImageBucketName = productapistack-productimagesbucket-...
+```
 
-# Confirm stack removal
-aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE
+Export the API URL:
+```sh
+export API_URL="https://<api-id>.execute-api.ap-southeast-2.amazonaws.com/dev"
 ```
 
 ---
 
-## ⏭️ Next Step
+### 2. End-to-End Live API Testing
 
-Proceed to **[Module 06: Scaling with Data Storage](../06_scaling_with_data_storage/README.md)** to learn how to add Amazon Simple Storage Service (Amazon S3) for file storage and Amazon ElastiCache for performance optimization.
+#### Step 1: Request a Presigned Upload URL
+```sh
+curl -s "$API_URL/products/prod_001/image-upload-url" | jq .
+```
+*Response returns `"upload_url"` and `"object_key": "products/prod_001/main.jpg"`.*
+
+#### Step 2: Upload Image Directly to Amazon S3
+Export the returned URL and upload a binary image:
+```sh
+UPLOAD_URL="<paste upload_url here>"
+
+# Create or select a test image
+echo "sample-jpeg-binary-payload" > test_image.jpg
+
+# Execute direct S3 PUT upload
+curl -X PUT -T test_image.jpg -H "Content-Type: image/jpeg" "$UPLOAD_URL" -v
+```
+
+#### Step 3: Verify Asynchronous S3 Event Trigger
+Because S3 is configured to trigger `ProcessImageUpload` on `.jpg` creations under `products/`, S3 automatically invokes the Lambda function. Verify that metadata was saved to DynamoDB:
+```sh
+curl -s "$API_URL/products/prod_001" | jq .
+```
+*Verify that `image_url`, `file_size`, and `upload_date` are now populated.*
+
+#### Step 4: Explicitly Link Image Key via API Gateway
+```sh
+curl -X POST "$API_URL/products/prod_001/images" \
+  -H "Content-Type: application/json" \
+  -d '{"image_key": "products/prod_001/main.jpg"}' | jq .
+```
+*Verify that `image_urls` list attribute in DynamoDB contains the new URL.*
+
+#### Step 5: Request a Presigned Download URL
+```sh
+curl -s "$API_URL/products/prod_001/image-download-url" | jq .
+```
+*Open the resulting `"download_url"` in your web browser to view or download the uploaded image.*
+
+---
+
+## 🧹 Clean Up
+
+To tear down all resources provisioned by this stack:
+
+```sh
+# Destroy the CloudFormation stack
+cdk destroy ProductApiStack
+
+# If objects were uploaded to S3, empty and delete bucket manually if needed
+BUCKET_NAME=$(aws s3 ls | grep productimagesbucket | awk '{print $3}')
+if [ -n "$BUCKET_NAME" ]; then
+    aws s3 rm "s3://$BUCKET_NAME" --recursive
+    aws s3api delete-bucket --bucket "$BUCKET_NAME"
+fi
+```
