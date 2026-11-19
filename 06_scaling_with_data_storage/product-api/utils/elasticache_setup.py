@@ -32,33 +32,49 @@ def create_elasticache_cluster(engine: str = 'valkey'):
     # COST WARNING: ElastiCache instances incur costs while running.
     # If this is for testing only, remove the instance when not in use.
     try:
-        kwargs = {
-            'CacheClusterId': target_cluster_id,
-            'CacheNodeType': 'cache.t3.micro',  # Start small - can scale up later
-            'Engine': engine,
-            'NumCacheNodes': 1,
-            'Port': port,
-        }
-        if subnet_group:
-            kwargs['CacheSubnetGroupName'] = subnet_group
-        if security_groups:
-            kwargs['SecurityGroupIds'] = security_groups
+        # Valkey and Redis require the CreateReplicationGroup API in ElastiCache
+        if engine.lower() in ['valkey', 'redis']:
+            kwargs = {
+                'ReplicationGroupId': target_cluster_id,
+                'ReplicationGroupDescription': f'Online Store {engine} Cluster',
+                'Engine': engine.lower(),
+                'CacheNodeType': 'cache.t3.micro',  # Start small - can scale up later
+                'NumCacheClusters': 1,
+                'Port': port,
+            }
+            if subnet_group:
+                kwargs['CacheSubnetGroupName'] = subnet_group
+            if security_groups:
+                kwargs['SecurityGroupIds'] = security_groups
 
-        response = elasticache_client.create_cache_cluster(**kwargs)
-        print(f"ElastiCache {engine} cluster '{target_cluster_id}' created successfully")
-        
-        cluster = response.get('CacheCluster', {})
-        
-        # Return appropriate endpoint based on engine
-        if engine == 'memcached':
-            config_endpoint = cluster.get('ConfigurationEndpoint', {})
-            return config_endpoint.get('Address')
-        else:
-            # Node endpoints populate once the cluster status is 'available'
-            cache_nodes = cluster.get('CacheNodes', [])
-            if cache_nodes and 'Endpoint' in cache_nodes[0]:
-                return cache_nodes[0]['Endpoint'].get('Address')
+            response = elasticache_client.create_replication_group(**kwargs)
+            print(f"ElastiCache {engine} replication group '{target_cluster_id}' created successfully")
+
+            group = response.get('ReplicationGroup', {})
+            node_groups = group.get('NodeGroups', [])
+            if node_groups and 'PrimaryEndpoint' in node_groups[0]:
+                return node_groups[0]['PrimaryEndpoint'].get('Address')
             return target_cluster_id
+        else:
+            # Memcached uses CreateCacheCluster
+            kwargs = {
+                'CacheClusterId': target_cluster_id,
+                'CacheNodeType': 'cache.t3.micro',  # Start small - can scale up later
+                'Engine': engine,
+                'NumCacheNodes': 1,
+                'Port': port,
+            }
+            if subnet_group:
+                kwargs['CacheSubnetGroupName'] = subnet_group
+            if security_groups:
+                kwargs['SecurityGroupIds'] = security_groups
+
+            response = elasticache_client.create_cache_cluster(**kwargs)
+            print(f"ElastiCache {engine} cluster '{target_cluster_id}' created successfully")
+            
+            cluster = response.get('CacheCluster', {})
+            config_endpoint = cluster.get('ConfigurationEndpoint', {})
+            return config_endpoint.get('Address') or target_cluster_id
             
     except Exception as e:
         print(f"Error creating {engine} cluster: {e}")

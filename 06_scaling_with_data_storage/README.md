@@ -210,8 +210,7 @@ Data (sub-ms)                      ┌──────────────
 │   ├── update-product-images-event.json # POST /products/prod_001/images event
 │   └── s3-image-upload-event.json     # S3 ObjectCreated mock event
 ├── scripts/
-│   ├── init.sh
-│   └── test_live_services.py          # Integration test runner against real AWS services
+│   └── init.sh
 └── tests/                             # Comprehensive Unit Test Suite
     ├── __init__.py
     ├── event_factory.py               # Standardized APIGatewayEventFactory
@@ -498,26 +497,6 @@ curl -X POST "http://127.0.0.1:3000/products/prod_001/images" \
 
 ---
 
-## ⚡ Direct Integration Script (Live AWS Services)
-
-To verify the complete image pipeline directly against your live AWS S3 bucket and DynamoDB table (without needing API Gateway or Docker), run:
-
-```sh
-python3 scripts/test_live_services.py
-```
-
-**Automated Workflow Executed by Script:**
-1. Connects to your configured AWS Region (`ap-southeast-2`) and verifies the `Products` table.
-2. Creates or resolves your live S3 bucket (`create_product_images_bucket()`).
-3. Executes `generate_presigned_url` to obtain an authorized S3 PUT URL.
-4. Uploads a sample binary JPEG to S3 using standard HTTP PUT.
-5. Executes `generate_download_url` to obtain an authorized S3 GET URL.
-6. Executes `update_product_images` to atomically append the S3 URL to DynamoDB.
-7. Executes `process_image_upload` with a mock S3 event, verifying `head_object` metadata extraction.
-8. Queries DynamoDB and displays the updated product item with full image attributes.
-
----
-
 ## 🚀 Cloud Deployment & Verification (`cdk deploy`)
 
 ### 1. Deploy Stack to AWS
@@ -527,60 +506,88 @@ Deploy all resources to your AWS account:
 cdk deploy ProductApiStack
 ```
 
-Upon completion, capture the output URLs:
-```text
-Outputs:
-ProductApiStack.ProductsApiUrl = https://<api-id>.execute-api.ap-southeast-2.amazonaws.com/dev/
-ProductApiStack.ProductImageBucketName = productapistack-productimagesbucket-...
-```
-
-Export the API URL:
+Upon completion, capture the output values and export both `API_URL` and `BUCKET_NAME`:
 ```sh
-export API_URL="https://<api-id>.execute-api.ap-southeast-2.amazonaws.com/dev"
+# Export API Gateway URL and S3 Bucket Name from stack outputs
+export API_URL=$(aws cloudformation describe-stacks \
+  --stack-name ProductApiStack \
+  --query "Stacks[0].Outputs[?OutputKey=='ProductsApiUrl'].OutputValue" \
+  --output text)
+
+export BUCKET_NAME=$(aws cloudformation describe-stacks \
+  --stack-name ProductApiStack \
+  --query "Stacks[0].Outputs[?OutputKey=='ProductImageBucketName'].OutputValue" \
+  --output text)
+
+echo "API_URL: $API_URL"
+echo "BUCKET_NAME: $BUCKET_NAME"
 ```
 
 ---
 
 ### 2. End-to-End Live API Testing
 
-#### Step 1: Request a Presigned Upload URL
+#### Step 1: Create a Product (Auto-Assigned ID)
+Create a new product with `title`, `price`, `category`, and `description`:
 ```sh
-curl -s "$API_URL/products/prod_001/image-upload-url" | jq .
+CREATE_RESP=$(curl -s -X POST "$API_URL/products" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Cloud Mechanical Keyboard",
+    "price": 149.99,
+    "category": "Electronics",
+    "description": "High performance mechanical keyboard"
+  }')
+
+echo "$CREATE_RESP" | jq .
+
+# Export the auto-assigned product ID
+export PRODUCT_ID=$(echo "$CREATE_RESP" | jq -r '.product.id')
+echo "Created Product ID: $PRODUCT_ID"
 ```
-*Response returns `"upload_url"` and `"object_key": "products/prod_001/main.jpg"`.*
 
-#### Step 2: Upload Image Directly to Amazon S3
-Export the returned URL and upload a binary image:
+#### Step 2: Request a Presigned Upload URL
 ```sh
-UPLOAD_URL="<paste upload_url here>"
+UPLOAD_RESP=$(curl -s "$API_URL/products/$PRODUCT_ID/image-upload-url")
+echo "$UPLOAD_RESP" | jq .
 
-# Create or select a test image
-echo "sample-jpeg-binary-payload" > test_image.jpg
+export UPLOAD_URL=$(echo "$UPLOAD_RESP" | jq -r .upload_url)
+```
+*Response returns `"upload_url"` and `"object_key": "products/<PRODUCT_ID>/main.jpg"`.*
 
+#### Step 3: Upload Image Directly to Amazon S3
+Use the existing test image (`test.jpg`) located in the repository:
+```sh
 # Execute direct S3 PUT upload
-curl -X PUT -T test_image.jpg -H "Content-Type: image/jpeg" "$UPLOAD_URL" -v
+curl -X PUT -T test.jpg -H "Content-Type: image/jpeg" "$UPLOAD_URL" -v
 ```
+*(HTTP status should return `200 OK`)*
 
-#### Step 3: Verify Asynchronous S3 Event Trigger
+#### Step 4: Verify Asynchronous S3 Event Trigger
 Because S3 is configured to trigger `ProcessImageUpload` on `.jpg` creations under `products/`, S3 automatically invokes the Lambda function. Verify that metadata was saved to DynamoDB:
 ```sh
-curl -s "$API_URL/products/prod_001" | jq .
+curl -s "$API_URL/products/$PRODUCT_ID" | jq .
 ```
-*Verify that `image_url`, `file_size`, and `upload_date` are now populated.*
+*Verify that `image_url`, `file_size`, and `upload_date` are now populated on the item.*
 
-#### Step 4: Explicitly Link Image Key via API Gateway
+#### Step 5: Explicitly Link Image Key via API Gateway
 ```sh
-curl -X POST "$API_URL/products/prod_001/images" \
+curl -X POST "$API_URL/products/$PRODUCT_ID/images" \
   -H "Content-Type: application/json" \
-  -d '{"image_key": "products/prod_001/main.jpg"}' | jq .
+  -d "{\"image_key\": \"products/$PRODUCT_ID/main.jpg\"}" | jq .
 ```
-*Verify that `image_urls` list attribute in DynamoDB contains the new URL.*
+*Verify that the `image_urls` list attribute in DynamoDB contains the new URL.*
 
-#### Step 5: Request a Presigned Download URL
+#### Step 6: Request a Presigned Download URL
 ```sh
-curl -s "$API_URL/products/prod_001/image-download-url" | jq .
+DOWNLOAD_RESP=$(curl -s "$API_URL/products/$PRODUCT_ID/image-download-url")
+echo "$DOWNLOAD_RESP" | jq .
+
+export DOWNLOAD_URL=$(echo "$DOWNLOAD_RESP" | jq -r .download_url)
+
+echo "Copy and open the download URL in your web browser to view the image:"
+echo "$DOWNLOAD_URL"
 ```
-*Open the resulting `"download_url"` in your web browser to view or download the uploaded image.*
 
 ---
 
@@ -588,6 +595,9 @@ curl -s "$API_URL/products/prod_001/image-download-url" | jq .
 
 > [!WARNING]
 > **Cost Awareness**: Amazon ElastiCache instances incur continuous hourly charges while running. If you are creating a cluster for educational or testing purposes, delete it when you finish your verification.
+
+> [!IMPORTANT]
+> **Valkey Engine Requirement**: In Amazon ElastiCache, the Valkey engine is **not** supported by the legacy `CreateCacheCluster` API. You must use the **`CreateReplicationGroup`** API (`aws elasticache create-replication-group`).
 
 #### Step 1: Provision Valkey Cluster via Python or AWS CLI
 You can provision the cluster using our helper script:
@@ -597,22 +607,31 @@ import os
 from utils.elasticache_setup import create_elasticache_cluster
 
 # Set your VPC Subnet Group and Security Group ID
-os.environ['CACHE_SUBNET_GROUP'] = 'my-cache-subnet-group'
+os.environ['CACHE_SUBNET_GROUP'] = 'store-cache-subnet-group'
 os.environ['CACHE_SECURITY_GROUP'] = 'sg-0123456789abcdef0'
 
 endpoint = create_elasticache_cluster(engine='valkey')
 print(f"Valkey Cluster Endpoint: {endpoint}")
 ```
 
-Or via the AWS CLI:
+Or via the AWS CLI using `create-replication-group`:
 ```sh
-aws elasticache create-cache-cluster \
-    --cache-cluster-id online-store-valkey-cache \
-    --cache-node-type cache.t3.micro \
+aws elasticache create-replication-group \
+    --replication-group-id online-store-valkey-cache \
+    --replication-group-description "Online Store Valkey Cache" \
     --engine valkey \
-    --num-cache-nodes 1 \
-    --cache-subnet-group-name my-cache-subnet-group \
-    --security-group-ids sg-0123456789abcdef0
+    --cache-node-type cache.t3.micro \
+    --num-cache-clusters 1 \
+    --cache-subnet-group-name store-cache-subnet-group \
+    --security-group-ids "$SG_ID"
+```
+
+Monitor cluster creation until status becomes `available`:
+```sh
+aws elasticache describe-replication-groups \
+    --replication-group-id online-store-valkey-cache \
+    --query "ReplicationGroups[0].[Status, NodeGroups[0].PrimaryEndpoint.Address]" \
+    --output table
 ```
 
 #### Step 2: Understand VPC Isolation
@@ -624,7 +643,7 @@ By design, **Amazon ElastiCache clusters are isolated within your Amazon VPC** a
    Launch an EC2 instance in the same VPC and security group:
    ```sh
    sudo dnf install valkey -y
-   valkey-cli -h online-store-valkey-cache.<id>.0001.apse2.cache.amazonaws.com -p 6379 ping
+   valkey-cli -h <primary-endpoint> -p 6379 ping
    # Output: PONG
    ```
 3. **Option C: AWS Systems Manager Port Forwarding**:
@@ -633,7 +652,7 @@ By design, **Amazon ElastiCache clusters are isolated within your Amazon VPC** a
    aws ssm start-session \
        --target i-0123456789abcdef0 \
        --document-name AWS-StartPortForwardingSessionToRemoteHost \
-       --parameters '{"host":["online-store-valkey-cache.<id>.0001.apse2.cache.amazonaws.com"],"portNumber":["6379"],"localPortNumber":["6379"]}'
+       --parameters '{"host":["<primary-endpoint>"],"portNumber":["6379"],"localPortNumber":["6379"]}'
    ```
    Now your local tools and scripts can connect to `localhost:6379`!
 
@@ -650,14 +669,13 @@ Amazon ElastiCache publishes real-time metrics to Amazon CloudWatch under namesp
 To tear down all resources provisioned by this stack:
 
 ```sh
-# 1. Delete ElastiCache cluster (if provisioned)
-aws elasticache delete-cache-cluster --cache-cluster-id online-store-valkey-cache
+# 1. Delete ElastiCache replication group (if provisioned)
+aws elasticache delete-replication-group --replication-group-id online-store-valkey-cache
 
-# 2. Empty S3 Bucket (if objects were uploaded)
-BUCKET_NAME=$(aws s3 ls | grep productimagesbucket | awk '{print $3}')
+# 2. Empty S3 Bucket (using exported $BUCKET_NAME)
 if [ -n "$BUCKET_NAME" ]; then
     aws s3 rm "s3://$BUCKET_NAME" --recursive
-    aws s3api delete-bucket --bucket "$BUCKET_NAME"
+    echo "S3 Bucket emptied."
 fi
 
 # 3. Destroy CloudFormation stack

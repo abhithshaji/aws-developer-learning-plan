@@ -8,13 +8,13 @@ class TestElastiCacheSetup(unittest.TestCase):
     """Test suite for ElastiCache cluster creation utilities."""
 
     def test_create_valkey_cluster_success(self):
-        """Test creating a Valkey cluster with port 6379."""
+        """Test creating a Valkey cluster via create_replication_group with port 6379."""
         mock_client = MagicMock()
-        mock_client.create_cache_cluster.return_value = {
-            'CacheCluster': {
-                'CacheClusterId': 'online-store-valkey-cache',
-                'CacheNodes': [
-                    {'Endpoint': {'Address': 'valkey.123456.cache.amazonaws.com'}}
+        mock_client.create_replication_group.return_value = {
+            'ReplicationGroup': {
+                'ReplicationGroupId': 'online-store-valkey-cache',
+                'NodeGroups': [
+                    {'PrimaryEndpoint': {'Address': 'valkey.123456.cache.amazonaws.com'}}
                 ]
             }
         }
@@ -23,8 +23,8 @@ class TestElastiCacheSetup(unittest.TestCase):
             endpoint = create_elasticache_cluster(engine='valkey')
 
             self.assertEqual(endpoint, 'valkey.123456.cache.amazonaws.com')
-            mock_client.create_cache_cluster.assert_called_once()
-            _, kwargs = mock_client.create_cache_cluster.call_args
+            mock_client.create_replication_group.assert_called_once()
+            _, kwargs = mock_client.create_replication_group.call_args
             self.assertEqual(kwargs['Port'], 6379)
             self.assertEqual(kwargs['Engine'], 'valkey')
 
@@ -49,6 +49,7 @@ class TestElastiCacheSetup(unittest.TestCase):
     def test_create_cluster_error_handling(self):
         """Test graceful error handling when cluster creation fails."""
         mock_client = MagicMock()
+        mock_client.create_replication_group.side_effect = Exception("AWS ElastiCache Quota Exceeded")
         mock_client.create_cache_cluster.side_effect = Exception("AWS ElastiCache Quota Exceeded")
 
         with patch('utils.elasticache_setup.elasticache_client', mock_client):
