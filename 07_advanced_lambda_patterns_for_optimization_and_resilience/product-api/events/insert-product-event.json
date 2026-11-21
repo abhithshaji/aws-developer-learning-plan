@@ -1,0 +1,13 @@
+{
+  "httpMethod": "POST",
+  "path": "/products",
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "body": "{\"title\": \"Wireless Gaming Mouse\", \"price\": 79.99, \"category\": \"Electronics\", \"description\": \"RGB wireless gaming mouse\"}",
+  "requestContext": {
+    "identity": {
+      "userArn": "arn:aws:iam::123456789012:user/local-tester"
+    }
+  }
+}

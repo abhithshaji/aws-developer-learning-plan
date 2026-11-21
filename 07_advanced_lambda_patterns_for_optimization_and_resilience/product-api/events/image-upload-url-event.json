@@ -1,0 +1,9 @@
+{
+  "httpMethod": "GET",
+  "pathParameters": {
+    "id": "prod_001"
+  },
+  "queryStringParameters": {
+    "type": "main"
+  }
+}
