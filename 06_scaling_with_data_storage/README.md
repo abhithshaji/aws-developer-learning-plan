@@ -541,8 +541,8 @@ CREATE_RESP=$(curl -s -X POST "$API_URL/products" \
 
 echo "$CREATE_RESP" | jq .
 
-# Export the auto-assigned product ID
-export PRODUCT_ID=$(echo "$CREATE_RESP" | jq -r '.product.id')
+# Export the auto-assigned product ID (.id is top-level in response)
+export PRODUCT_ID=$(echo "$CREATE_RESP" | jq -r '.id')
 echo "Created Product ID: $PRODUCT_ID"
 ```
 
@@ -552,6 +552,7 @@ UPLOAD_RESP=$(curl -s "$API_URL/products/$PRODUCT_ID/image-upload-url")
 echo "$UPLOAD_RESP" | jq .
 
 export UPLOAD_URL=$(echo "$UPLOAD_RESP" | jq -r .upload_url)
+echo "Upload url : $UPLOAD_URL"
 ```
 *Response returns `"upload_url"` and `"object_key": "products/<PRODUCT_ID>/main.jpg"`.*
 
@@ -591,93 +592,38 @@ echo "$DOWNLOAD_URL"
 
 ---
 
-### 3. Deploying & Verifying ElastiCache on AWS Cloud
+---
 
-> [!WARNING]
-> **Cost Awareness**: Amazon ElastiCache instances incur continuous hourly charges while running. If you are creating a cluster for educational or testing purposes, delete it when you finish your verification.
+### 3. Note on In-Memory Caching (Amazon ElastiCache / Valkey)
 
-> [!IMPORTANT]
-> **Valkey Engine Requirement**: In Amazon ElastiCache, the Valkey engine is **not** supported by the legacy `CreateCacheCluster` API. You must use the **`CreateReplicationGroup`** API (`aws elasticache create-replication-group`).
+The caching implementation files ([db/cache_db.py](./product-api/db/cache_db.py) and [utils/elasticache_setup.py](./product-api/utils/elasticache_setup.py)) are included in the repository as complete reference implementations demonstrating:
+- **Cache-Aside Pattern** (`get_product_with_cache`)
+- **GSI Category Search Caching** (`search_products_with_cache`)
+- **Dual-Tier Cache Invalidation on Writes** (`update_product_with_cache_invalidation`)
+- **Data-Type Specific TTLs & Performance Analytics** (`CACHE_TTL`, `get_comprehensive_cache_stats`)
 
-#### Step 1: Provision Valkey Cluster via Python or AWS CLI
-You can provision the cluster using our helper script:
-
-```python
-import os
-from utils.elasticache_setup import create_elasticache_cluster
-
-# Set your VPC Subnet Group and Security Group ID
-os.environ['CACHE_SUBNET_GROUP'] = 'store-cache-subnet-group'
-os.environ['CACHE_SECURITY_GROUP'] = 'sg-0123456789abcdef0'
-
-endpoint = create_elasticache_cluster(engine='valkey')
-print(f"Valkey Cluster Endpoint: {endpoint}")
-```
-
-Or via the AWS CLI using `create-replication-group`:
-```sh
-aws elasticache create-replication-group \
-    --replication-group-id online-store-valkey-cache \
-    --replication-group-description "Online Store Valkey Cache" \
-    --engine valkey \
-    --cache-node-type cache.t3.micro \
-    --num-cache-clusters 1 \
-    --cache-subnet-group-name store-cache-subnet-group \
-    --security-group-ids "$SG_ID"
-```
-
-Monitor cluster creation until status becomes `available`:
-```sh
-aws elasticache describe-replication-groups \
-    --replication-group-id online-store-valkey-cache \
-    --query "ReplicationGroups[0].[Status, NodeGroups[0].PrimaryEndpoint.Address]" \
-    --output table
-```
-
-#### Step 2: Understand VPC Isolation
-By design, **Amazon ElastiCache clusters are isolated within your Amazon VPC** and do not have public IP addresses. To communicate with your live ElastiCache cluster:
-
-1. **Option A: Connect Lambda Functions to VPC**:
-   Configure your Lambda functions in `product_api_stack.py` with `vpc=vpc, vpc_subnets=...` and security groups allowing outbound traffic on port 6379. Provide the cluster endpoint via environment variable `ELASTICACHE_ENDPOINT`.
-2. **Option B: Connect via EC2 Bastion / Cloud9**:
-   Launch an EC2 instance in the same VPC and security group:
-   ```sh
-   sudo dnf install valkey -y
-   valkey-cli -h <primary-endpoint> -p 6379 ping
-   # Output: PONG
-   ```
-3. **Option C: AWS Systems Manager Port Forwarding**:
-   If you have an EC2 bastion managed by SSM, forward port 6379 to your local workstation:
-   ```sh
-   aws ssm start-session \
-       --target i-0123456789abcdef0 \
-       --document-name AWS-StartPortForwardingSessionToRemoteHost \
-       --parameters '{"host":["<primary-endpoint>"],"portNumber":["6379"],"localPortNumber":["6379"]}'
-   ```
-   Now your local tools and scripts can connect to `localhost:6379`!
-
-#### Step 3: Monitor Cache Metrics in CloudWatch
-Amazon ElastiCache publishes real-time metrics to Amazon CloudWatch under namespace `AWS/ElastiCache`:
-- `CacheHits` & `CacheMisses`: Used to measure your hit rate `(Hits / (Hits + Misses)) * 100`.
-- `BytesUsedForCache`: Monitors memory consumption.
-- `Evictions`: Ensures your cache memory size is sufficient. If evictions > 0, consider increasing node size or tuning TTLs.
+> [!NOTE]
+> **Why ElastiCache is not baked into the CDK Stack**: Unlike serverless services (DynamoDB, Lambda, S3) that cost \$0 when idle, ElastiCache nodes run on dedicated instances (`cache.t3.micro`) that incur continuous 24/7 hourly charges (~$12–$15/month) and require VPC subnets and NAT Gateways.
+>
+> You can verify and test all caching logic **completely free**:
+> 1. **Unit tests with mocks**: `pytest tests/unit/cache/ -v`
+> 2. **Locally with Docker**: `docker run -d --name valkey-local -p 6379:6379 valkey/valkey:latest`
+>
+> If you choose to provision a live Valkey cluster on AWS, you can invoke `create_elasticache_cluster(engine='valkey')` from `utils/elasticache_setup.py` or run `aws elasticache create-replication-group` (note: Valkey in ElastiCache uses the `CreateReplicationGroup` API rather than legacy cache clusters).
 
 ---
 
 ## 🧹 Clean Up
 
-To tear down all resources provisioned by this stack:
+To tear down all resources provisioned on AWS:
 
 ```sh
-# 1. Delete ElastiCache replication group (if provisioned)
-aws elasticache delete-replication-group --replication-group-id online-store-valkey-cache
-
-# 2. Empty S3 Bucket (using exported $BUCKET_NAME)
+# 1. Empty S3 Bucket (using exported $BUCKET_NAME)
 if [ -n "$BUCKET_NAME" ]; then
     aws s3 rm "s3://$BUCKET_NAME" --recursive
     echo "S3 Bucket emptied."
 fi
 
-# 3. Destroy CloudFormation stack
+# 2. Destroy CloudFormation stack
 cdk destroy ProductApiStack
 ```
