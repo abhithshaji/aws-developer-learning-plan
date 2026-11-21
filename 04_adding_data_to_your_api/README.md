@@ -30,15 +30,13 @@ If you are coming from **Module 03**, here is what changed in this module:
 
 ### 1. Activate Virtual Environment & Install Local Dependencies
 ```sh
-# Navigate to the project directory
-cd product-api
-
-# Activate the virtual environment
+cd 04_adding_data_to_your_api/product-api
+python3 -m venv .venv
 source .venv/bin/activate                 # macOS/Linux
 # .venv\Scripts\Activate.ps1             # Windows PowerShell
 
-# Install requirements.txt libs
 pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
 Ensure `pydantic>=2.0.0` is present in your `requirements.txt`:
