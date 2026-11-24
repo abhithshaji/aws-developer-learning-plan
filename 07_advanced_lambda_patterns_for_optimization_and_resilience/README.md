@@ -204,6 +204,62 @@ If you are coming from **Module 06**, here is what has been introduced in this m
 
 ---
 
+## 🛠️ Installations & Setup
+
+### 1. Development Dependencies
+Activate the virtual environment and install project dependencies:
+
+```sh
+cd 07_advanced_lambda_patterns_for_optimization_and_resilience/product-api
+python3 -m venv .venv
+source .venv/bin/activate                 # macOS/Linux
+# .venv\Scripts\Activate.ps1             # Windows PowerShell
+
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+```
+
+Your `requirements.txt` includes:
+```text
+aws-cdk-lib>=2.170.0
+constructs>=10.0.0
+pydantic>=2.0.0
+redis>=5.0.0
+boto3>=1.35.0
+```
+
+### 2. Pydantic Lambda Layer
+If the layer binary directory is not yet built, package Pydantic for Amazon Linux / Python 3.13:
+
+```sh
+mkdir -p layers/pydantic/python
+
+pip install \
+  --platform manylinux2014_x86_64 \
+  --target layers/pydantic/python \
+  --implementation cp \
+  --python-version 3.13 \
+  --only-binary=:all: \
+  --no-cache-dir \
+  pydantic
+```
+
+### 3. Product Utilities Lambda Layer
+The source code for `ProductUtilitiesLayer` is located under `layers/product_utilities/python/`. Because `pydantic` is provided by `PydanticLayer` and `boto3` is pre-installed in the AWS Lambda runtime, no C-extension compilation is required—CDK packages this directory automatically on deploy:
+
+```text
+layers/product_utilities/
+├── python/
+│   ├── __init__.py
+│   ├── product_validator.py
+│   ├── database_helper.py
+│   └── response_formatter.py
+└── requirements.txt
+```
+
+
+---
+
 ## 🧪 Testing & Verification Guide
 
 ### 1. Local Testing & Verification
@@ -438,3 +494,8 @@ for version in $(aws lambda list-layer-versions --layer-name product-utilities -
 done
 ```
 
+---
+
+## ⏭️ Next Step
+
+Proceed to **[Module 08: Adding Asynchronous Processing](../08_adding_asynchronous_processing/README.md)** to learn how to address the responsiveness challenges that prevent your API from handling real-world e-commerce demands.
