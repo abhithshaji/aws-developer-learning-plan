@@ -96,6 +96,7 @@ aws-developer-learning-plan/
 ├── 04_adding_data_to_your_api/                       # DynamoDB integration, Pydantic validation & Lambda layers
 ├── 05_testing_and_error_handling/                    # Unit testing (Pytest/Moto), DLQ, Retries, Circuit Breaker & SAM CLI
 ├── 06_scaling_with_data_storage/                     # Amazon S3 media storage, presigned URLs, event triggers & ElastiCache (Valkey) caching
+├── 07_advanced_lambda_patterns_for_optimization_and_resilience/ # Shared utility layers, versioning & resilience patterns
 ├── ...                                               # Upcoming modules
 └── README.md                                         # Main documentation & companion guide
 ```
@@ -110,7 +111,8 @@ aws-developer-learning-plan/
 | **04** | [Adding Data to Your API](./04_adding_data_to_your_api) | Integrate Amazon DynamoDB, Pydantic request validation, and Lambda layers | ✅ Complete |
 | **05** | [Testing and Error Handling](./05_testing_and_error_handling) | Automated unit testing (Pytest/Moto), Dead-Letter Queues (DLQ), Lambda Destinations, Exponential Backoff, Circuit Breakers, and SAM CLI local testing | ✅ Complete |
 | **06** | [Scaling with Data Storage](./06_scaling_with_data_storage) | Amazon S3 object storage, Presigned PUT/GET URLs, DynamoDB atomic media linking, S3 event triggers, and ElastiCache (Valkey) in-memory caching | ✅ Complete |
-| **06+** | *Upcoming Modules* | Data modeling & access patterns, messaging (SQS/SNS), Cognito authentication, CI/CD pipelines, Observability | ⏳ Planned |
+| **07** | [Advanced Lambda Patterns](./07_advanced_lambda_patterns_for_optimization_and_resilience) | Shared Lambda layers, layer versioning, rollback strategies, optimization & resilience | 🔄 In Progress |
+| **07+** | *Upcoming Modules* | Data modeling & access patterns, messaging (SQS/SNS), Cognito authentication, CI/CD pipelines, Observability | ⏳ Planned |
 
 ---
 

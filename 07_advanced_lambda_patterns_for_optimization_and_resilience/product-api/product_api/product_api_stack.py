@@ -71,6 +71,16 @@ class ProductApiStack(Stack):
             description="Layer containing Pydantic"
         )
 
+        # Package Product Utilities into a shared Lambda Layer
+        self.product_utils_layer = aws_lambda.LayerVersion(
+            self, "ProductUtilitiesLayer",
+            code=aws_lambda.Code.from_asset("layers/product_utilities"),
+            compatible_runtimes=[lambda_runtime],
+            description="v1.0.0 - Shared validation, database helpers, and response formatting"
+        )
+
+        common_layers = [pydantic_layer, self.product_utils_layer]
+
         # Create Dead-Letter Queue
         self.dlq = sqs.Queue(
             self, "ProductApiDLQ",
@@ -85,6 +95,7 @@ class ProductApiStack(Stack):
             runtime=lambda_runtime,
             handler="lambda_code.get_product.handler",
             code=code_location,
+            layers=[self.product_utils_layer],
             environment=common_env
         )
         products_table.grant_read_data(self.get_product)
@@ -94,6 +105,7 @@ class ProductApiStack(Stack):
             runtime=lambda_runtime,
             handler="lambda_code.query_products.handler",
             code=code_location,
+            layers=[self.product_utils_layer],
             environment=common_env
         )
         products_table.grant_read_data(self.query_products)
@@ -103,7 +115,7 @@ class ProductApiStack(Stack):
             runtime=lambda_runtime,
             handler="lambda_code.insert_product.handler",
             code=code_location,
-            layers=[pydantic_layer],
+            layers=common_layers,
             dead_letter_queue=self.dlq,
             environment=common_env
         )
@@ -114,7 +126,7 @@ class ProductApiStack(Stack):
             runtime=lambda_runtime,
             handler="lambda_code.update_product.handler",
             code=code_location,
-            layers=[pydantic_layer],
+            layers=common_layers,
             environment=common_env
         )
         products_table.grant_read_write_data(self.update_product)
@@ -134,6 +146,7 @@ class ProductApiStack(Stack):
             runtime=lambda_runtime,
             handler="lambda_code.generate_presigned_url.handler",
             code=code_location,
+            layers=[self.product_utils_layer],
             environment=common_env
         )
         image_bucket.grant_put(self.generate_presigned_url)
@@ -144,6 +157,7 @@ class ProductApiStack(Stack):
             runtime=lambda_runtime,
             handler="lambda_code.generate_download_url.handler",
             code=code_location,
+            layers=[self.product_utils_layer],
             environment=common_env
         )
         image_bucket.grant_read(self.generate_download_url)
@@ -154,6 +168,7 @@ class ProductApiStack(Stack):
             runtime=lambda_runtime,
             handler="lambda_code.update_product_images.handler",
             code=code_location,
+            layers=[self.product_utils_layer],
             environment=common_env
         )
         products_table.grant_read_write_data(self.update_product_images)
@@ -164,6 +179,7 @@ class ProductApiStack(Stack):
             runtime=lambda_runtime,
             handler="lambda_code.process_image_upload.handler",
             code=code_location,
+            layers=[self.product_utils_layer],
             environment=common_env
         )
         image_bucket.grant_read(self.process_image_upload)

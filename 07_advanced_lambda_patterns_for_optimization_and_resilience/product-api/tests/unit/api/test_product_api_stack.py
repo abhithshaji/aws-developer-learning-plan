@@ -24,3 +24,15 @@ def test_s3_bucket_created():
             "Status": "Enabled"
         }
     })
+
+def test_product_utilities_layer_created():
+    """Verify CDK synthesizes the ProductUtilitiesLayer with compatible runtimes."""
+    app = core.App()
+    stack = ProductApiStack(app, "product-api")
+    template = assertions.Template.from_stack(stack)
+
+    template.has_resource_properties("AWS::Lambda::LayerVersion", {
+        "Description": "v1.0.0 - Shared validation, database helpers, and response formatting",
+        "CompatibleRuntimes": ["python3.13"]
+    })
+
