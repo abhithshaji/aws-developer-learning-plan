@@ -58,3 +58,47 @@ class TestCircuitBreaker(unittest.TestCase):
         self.assertEqual(result2, "Recovered")
         self.assertEqual(breaker.state, CircuitState.CLOSED)
         self.assertEqual(breaker.failure_count, 0)
+
+    def test_circuit_breaker_timeout_parameter_support(self):
+        """Test CircuitBreaker supports the tutorial 'timeout' parameter."""
+        breaker = CircuitBreaker(failure_threshold=5, timeout=15, success_threshold=2)
+        self.assertEqual(breaker.timeout, 15)
+        self.assertEqual(breaker.recovery_timeout, 15)
+
+    def test_process_payment_success(self):
+        """Test process_payment returns success when payment gateway succeeds."""
+        from utils.circuit_breaker import process_payment
+        mock_gateway = MagicMock()
+        mock_charge_result = MagicMock()
+        mock_charge_result.id = "txn_12345"
+        mock_gateway.charge.return_value = mock_charge_result
+
+        res = process_payment(order_id="order_1", amount=99.99, payment_gateway=mock_gateway)
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["transaction_id"], "txn_12345")
+
+    def test_process_payment_gateway_failure_and_circuit_open(self):
+        """Test process_payment gracefully fails and opens the circuit after threshold."""
+        from utils.circuit_breaker import process_payment, payment_circuit
+        payment_circuit.state = CircuitState.CLOSED
+        payment_circuit.failure_count = 0
+
+        mock_gateway = MagicMock()
+        mock_gateway.charge.side_effect = Exception("Payment Gateway Down")
+
+        # 5 failures trip the breaker
+        for _ in range(5):
+            res = process_payment(order_id="order_err", amount=50.0, payment_gateway=mock_gateway)
+            self.assertEqual(res["status"], "failed")
+
+        self.assertEqual(payment_circuit.state, CircuitState.OPEN)
+
+        # 6th attempt fails fast because circuit is open
+        res_open = process_payment(order_id="order_err", amount=50.0, payment_gateway=mock_gateway)
+        self.assertEqual(res_open["status"], "failed")
+        self.assertIn("Circuit breaker is OPEN", res_open["error"])
+
+        # Reset state for other tests
+        payment_circuit.state = CircuitState.CLOSED
+        payment_circuit.failure_count = 0
+

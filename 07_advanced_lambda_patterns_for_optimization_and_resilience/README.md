@@ -47,6 +47,12 @@ If you are coming from **Module 06**, here is what has been introduced in this m
   ```
 - Attached the layer to all core REST and Media Lambda functions.
 
+### 4. Downstream Resilience: Circuit Breaker Pattern (`utils/circuit_breaker.py`)
+- **State Machine Protection**: Prevents repeated calls to failing third-party services (e.g. external payment gateways or relational databases) via a 3-state machine (`CLOSED`, `OPEN`, `HALF_OPEN`).
+- **Lambda Concurrency Preservation**: When a downstream service goes down, Lambda invocations fail fast ($< 1\text{ ms}$) rather than hanging until the 29-second API Gateway timeout, saving compute costs and preventing regional concurrency pool exhaustion.
+- **Service Integration Example (`process_payment`)**: Wraps `payment_circuit = CircuitBreaker(failure_threshold=5, timeout=30)` to gracefully catch open breaker exceptions and return controlled failure envelopes.
+- **Telemetry**: Emits `CircuitBreakerState` and `FailureCount` metrics to Amazon CloudWatch under namespace `ProductAPI/CircuitBreakers`.
+
 ---
 
 ## 🏛️ Layer Architecture & Lambda Runtime Mounts
@@ -141,7 +147,7 @@ If you are coming from **Module 06**, here is what has been introduced in this m
 We use **Pytest** with **Moto** and `unittest.mock` to test all layers, handlers, and cloud constructs:
 
 ```sh
-# Run the entire test suite (73 passing tests)
+# Run the entire test suite (76 passing tests)
 pytest tests/unit/ -v
 
 # Run layer unit tests directly:
@@ -151,7 +157,7 @@ pytest tests/unit/api/test_product_utilities_layer.py -v
 pytest tests/unit/api/test_product_api_stack.py -v
 ```
 
-### Test Suite Coverage (73 Passing Tests)
+### Test Suite Coverage (76 Passing Tests)
 
 | Subfolder | Test Module | Coverage Area | Status |
 | :--- | :--- | :--- | :--- |
@@ -169,7 +175,7 @@ pytest tests/unit/api/test_product_api_stack.py -v
 | | `test_process_image_upload.py` | S3 event notification parsing, `head_object` metadata extraction, DynamoDB updates | **Passed** |
 | **`tests/unit/cache/`** | `test_elasticache_setup.py` | ElastiCache cluster provisioning (Valkey & Memcached) & error handling | **Passed** |
 | | `test_cache_db.py` | Cache-Aside retrieval, GSI query caching, cache invalidation, TTL strategies, metrics | **Passed** |
-| **`tests/unit/resilience/`** | `test_circuit_breaker.py` | Circuit breaker 3-state state machine (`CLOSED` → `OPEN` → `HALF_OPEN`) | **Passed** |
+| **`tests/unit/resilience/`** | `test_circuit_breaker.py` | Circuit breaker 3-state state machine, timeout alias, `process_payment` integration | **Passed** |
 | | `test_retry_utils.py` | Exponential backoff, full jitter, `RetryPolicyManager` rules | **Passed** |
 | | `test_dlq_processor.py` | Asynchronous DLQ message triage, timeout/rate-limit classification | **Passed** |
 

@@ -23,9 +23,11 @@ class CircuitState(Enum):
 class CircuitBreaker:
     """Circuit breaker implementation for service protection."""
     
-    def __init__(self, failure_threshold=5, recovery_timeout=60, success_threshold=3):
+    def __init__(self, failure_threshold=5, recovery_timeout=60, success_threshold=3, timeout=None):
         self.failure_threshold = failure_threshold
-        self.recovery_timeout = recovery_timeout
+        # Support both 'timeout' (tutorial parameter) and 'recovery_timeout'
+        self.recovery_timeout = timeout if timeout is not None else recovery_timeout
+        self.timeout = self.recovery_timeout
         self.success_threshold = success_threshold
         
         self.failure_count = 0
@@ -42,7 +44,7 @@ class CircuitBreaker:
                     self.state = CircuitState.HALF_OPEN
                     self.success_count = 0
                 else:
-                    raise CircuitBreakerOpenError("Circuit breaker is open")
+                    raise CircuitBreakerOpenError("Circuit breaker is OPEN")
             
             try:
                 result = func(*args, **kwargs)
@@ -55,17 +57,15 @@ class CircuitBreaker:
     
     def _should_attempt_reset(self):
         """Check if enough time has passed to attempt reset."""
-        return (time.time() - self.last_failure_time) >= self.recovery_timeout
+        return (time.time() - self.last_failure_time) >= self.timeout
     
     def _on_success(self):
         """Handle successful operation."""
+        self.failure_count = 0
         if self.state == CircuitState.HALF_OPEN:
             self.success_count += 1
             if self.success_count >= self.success_threshold:
                 self.state = CircuitState.CLOSED
-                self.failure_count = 0
-        else:
-            self.failure_count = 0
     
     def _on_failure(self):
         """Handle failed operation."""
@@ -77,8 +77,23 @@ class CircuitBreaker:
 
 
 # Shared Breaker Instances
-database_circuit_breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=30)
-payment_circuit_breaker = CircuitBreaker(failure_threshold=2, recovery_timeout=120)
+database_circuit_breaker = CircuitBreaker(failure_threshold=3, timeout=30)
+payment_circuit = CircuitBreaker(failure_threshold=5, timeout=30)
+payment_circuit_breaker = payment_circuit  # Alias for backward compatibility
+
+
+def process_payment(order_id, amount, payment_gateway=None):
+    """Process customer payment with circuit breaker fault tolerance."""
+    if payment_gateway is None:
+        raise ValueError("Payment gateway client is required")
+        
+    try:
+        result = payment_circuit.call(payment_gateway.charge, amount=amount)
+        txn_id = getattr(result, 'id', str(result))
+        return {"status": "success", "transaction_id": txn_id}
+    except Exception as e:
+        # Circuit is open or payment failed
+        return {"status": "failed", "error": str(e)}
 
 
 # Metrics & Health Monitoring
