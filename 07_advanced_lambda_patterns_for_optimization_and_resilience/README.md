@@ -53,6 +53,14 @@ If you are coming from **Module 06**, here is what has been introduced in this m
 - **Service Integration Example (`process_payment`)**: Wraps `payment_circuit = CircuitBreaker(failure_threshold=5, timeout=30)` to gracefully catch open breaker exceptions and return controlled failure envelopes.
 - **Telemetry**: Emits `CircuitBreakerState` and `FailureCount` metrics to Amazon CloudWatch under namespace `ProductAPI/CircuitBreakers`.
 
+### 5. Retry Logic with Exponential Backoff & Jitter (`utils/retry_utils.py`)
+- **Exponential Backoff**: Doubles the delay between consecutive retry attempts ($delay = base\_delay \times 2^{attempt}$) to give struggling downstream services breathing room to recover.
+- **Full Jitter**: Adds a random variation ($0 \le jitter \le 0.1 \times delay$) to eliminate synchronized retry spikes across parallel Lambda invocations (averting the "thundering herd" problem).
+- **Dual Invocation Support**:
+  - Direct execution runner: `retry_with_exponential_backoff(func, max_retries=3, base_delay=0.1, max_delay=5)`
+  - Parameterized decorator: `@retry_with_exponential_backoff(max_retries=2, base_delay=0.5, max_delay=3)`
+- **Shipping Rate Calculation (`get_shipping_rate`)**: Wraps third-party shipping API calculations with exponential backoff and automatically falls back to cached regional rates (`get_cached_rate`) if all retries are exhausted.
+
 ---
 
 ## 🏛️ Layer Architecture & Lambda Runtime Mounts
@@ -147,7 +155,7 @@ If you are coming from **Module 06**, here is what has been introduced in this m
 We use **Pytest** with **Moto** and `unittest.mock` to test all layers, handlers, and cloud constructs:
 
 ```sh
-# Run the entire test suite (76 passing tests)
+# Run the entire test suite (81 passing tests)
 pytest tests/unit/ -v
 
 # Run layer unit tests directly:
@@ -157,7 +165,7 @@ pytest tests/unit/api/test_product_utilities_layer.py -v
 pytest tests/unit/api/test_product_api_stack.py -v
 ```
 
-### Test Suite Coverage (76 Passing Tests)
+### Test Suite Coverage (81 Passing Tests)
 
 | Subfolder | Test Module | Coverage Area | Status |
 | :--- | :--- | :--- | :--- |
@@ -176,7 +184,7 @@ pytest tests/unit/api/test_product_api_stack.py -v
 | **`tests/unit/cache/`** | `test_elasticache_setup.py` | ElastiCache cluster provisioning (Valkey & Memcached) & error handling | **Passed** |
 | | `test_cache_db.py` | Cache-Aside retrieval, GSI query caching, cache invalidation, TTL strategies, metrics | **Passed** |
 | **`tests/unit/resilience/`** | `test_circuit_breaker.py` | Circuit breaker 3-state state machine, timeout alias, `process_payment` integration | **Passed** |
-| | `test_retry_utils.py` | Exponential backoff, full jitter, `RetryPolicyManager` rules | **Passed** |
+| | `test_retry_utils.py` | Exponential backoff, jitter, direct runner, `get_shipping_rate`, `RetryPolicyManager` | **Passed** |
 | | `test_dlq_processor.py` | Asynchronous DLQ message triage, timeout/rate-limit classification | **Passed** |
 
 ---
