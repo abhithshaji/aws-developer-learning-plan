@@ -1,7 +1,5 @@
 # ⚡ Module 07: Advanced Lambda Patterns for Optimization and Resilience
 
-> [!NOTE]
-> **Module In Progress**: This guide documents the architectural enhancements and patterns introduced in **Module 07: Advanced Lambda Patterns for Optimization and Resilience**. The current milestone establishes **Custom Lambda Layers for Shared Utilities & Domain Logic**, modular packaging, safe layer versioning, and rollback procedures.
 
 In this module, we optimize our serverless microservice architecture for performance, maintainability, and operational resilience. We reduce Lambda bundle sizes, eliminate redundant boilerplate across microservices, and decouple business logic into immutable, versioned **AWS Lambda Layers**.
 
@@ -61,6 +59,21 @@ If you are coming from **Module 06**, here is what has been introduced in this m
   - Parameterized decorator: `@retry_with_exponential_backoff(max_retries=2, base_delay=0.5, max_delay=3)`
 - **Shipping Rate Calculation (`get_shipping_rate`)**: Wraps third-party shipping API calculations with exponential backoff and automatically falls back to cached regional rates (`get_cached_rate`) if all retries are exhausted.
 
+### 6. Graceful Degradation Pattern (`utils/graceful_degradation.py`)
+- **Critical vs. Non-Critical Decomposition**:
+  - **Payment (Critical - Must Succeed)**: Retried with exponential backoff. If all attempts fail, order processing halts immediately with `status: "failed"` to prevent unpaid order dispatch.
+  - **Shipping Rate (Non-Critical - Fallback)**: If live carrier calculations fail after retries, degrades gracefully to estimated/cached rates (`get_estimated_shipping_rate`) without blocking checkout.
+  - **Inventory Deduction (Non-Critical - Asynchronous Triage)**: If synchronous stock decrement fails, enqueues the payload to SQS (`queue_inventory_update`) for asynchronous reconciliation.
+  - **Customer Email (Non-Critical - Asynchronous Triage)**: If transactional email delivery fails, enqueues the notification (`queue_email`) for background dispatch.
+- **End-to-End Orchestration (`process_order`)**: Guarantees customer transactions succeed even during multi-service downstream degradations as long as critical payment was secured.
+
+### 7. Unified Resilience Strategies: `ResilientExternalService` (`utils/resilient_service.py`)
+- **Composition of Patterns**: Combines **Circuit Breaker** (macro outage fail-fast) and **Exponential Backoff with Jitter** (micro glitch recovery) with optional **Graceful Degradation** (fallbacks) into a single reusable object.
+- **Fail-Fast Defense**: When downstream services experience extended outages, the circuit trips to `OPEN`, immediately returning fallback data without burning execution time or exhausting Lambda concurrency.
+- **Lambda Handler Integration (`handler`)**:
+  - Demonstrates strict error handling for critical payment flows (HTTP 500 on failure).
+  - Demonstrates fallback execution for non-critical shipping rate calculation (HTTP 200 with cached rates).
+
 ---
 
 ## 🏛️ Layer Architecture & Lambda Runtime Mounts
@@ -81,6 +94,40 @@ If you are coming from **Module 06**, here is what has been introduced in this m
                      │  sys.path automatically resolves:     │
                      │  ["/var/task", "/opt/python", ...]    │
                      └───────────────────────────────────────┘
+```
+
+---
+
+## 🛡️ Resilience Flow Architecture (`ResilientExternalService`)
+
+```text
+                                  ┌─────────────────────────────┐
+                                  │   ResilientExternalService  │
+                                  └──────────────┬──────────────┘
+                                                 │
+                                     Is Circuit CLOSED/HALF-OPEN?
+                                                 │
+                        ┌────────────────────────┴────────────────────────┐
+                        │ YES                                             │ NO (Circuit is OPEN)
+                        ▼                                                 ▼
+        ┌───────────────────────────────┐                       ┌───────────────────┐
+        │ retry_with_exponential_backoff│                       │     Fail Fast     │
+        │       (Attempts 1 .. N)       │                       │     (< 1 ms)      │
+        └───────────────┬───────────────┘                       └─────────┬─────────┘
+                        │                                                 │
+             Did call succeed?                                            │
+           ┌────────────┴────────────┐                                    │
+           │ YES                     │ NO (All retries exhausted)         │
+           ▼                         ▼                                    │
+   {"status": "success"}     Trip failure count / OPEN                    │
+                             Does a fallback exist?                       │
+                                     │                                    │
+                        ┌────────────┴────────────┐                       │
+                        │ YES                     │ NO                    │
+                        ▼                         ▼                       │
+               {"status": "fallback"}     {"status": "failed"}            │
+                        ▲                                                 │
+                        └─────────────────────────────────────────────────┘
 ```
 
 ---
@@ -112,8 +159,10 @@ If you are coming from **Module 06**, here is what has been introduced in this m
 ├── utils/                             # Resilience & Infrastructure Helpers
 │   ├── __init__.py
 │   ├── response_utils.py              # Bridges to response_formatter
-│   ├── retry_utils.py                 # Exponential backoff with full jitter
-│   ├── circuit_breaker.py             # Circuit breaker state machine
+│   ├── retry_utils.py                 # Exponential backoff with full jitter & shipping rates
+│   ├── circuit_breaker.py             # Circuit breaker state machine & payment processing
+│   ├── graceful_degradation.py        # Critical aborts, shipping fallbacks & async queues
+│   ├── resilient_service.py           # ResilientExternalService composite orchestrator & handler
 │   ├── dlq_setup.py                   # SQS DLQ helper
 │   ├── destinations_setup.py          # Lambda Destinations helper
 │   ├── s3_setup.py                    # S3 bucket & notification setup
@@ -145,27 +194,76 @@ If you are coming from **Module 06**, here is what has been introduced in this m
         │   └── test_error_handling.py
         ├── storage/                           # S3 & image processing tests
         ├── cache/                             # ElastiCache & Valkey tests
-        └── resilience/                        # Circuit breaker, retry & DLQ tests
+        └── resilience/
+            ├── test_circuit_breaker.py        # Circuit breaker 3-state state machine & payments
+            ├── test_retry_utils.py            # Exponential backoff & jitter calculations
+            ├── test_graceful_degradation.py   # Multi-service fallback & SQS async triage
+            ├── test_resilient_service.py      # ResilientExternalService & handler tests
+            └── test_dlq_processor.py          # Asynchronous DLQ message triage
 ```
 
 ---
 
-## 🧪 Running Unit Tests
+## 🧪 Testing & Verification Guide
 
-We use **Pytest** with **Moto** and `unittest.mock` to test all layers, handlers, and cloud constructs:
+### 1. Local Testing & Verification
 
+You can verify all layers, handlers, resilience patterns, and infrastructure templates locally without incurring AWS charges:
+
+#### A. Run the Entire Test Suite (95 Passing Tests)
 ```sh
-# Run the entire test suite (81 passing tests)
+cd 07_advanced_lambda_patterns_for_optimization_and_resilience/product-api
+source .venv/bin/activate
 pytest tests/unit/ -v
-
-# Run layer unit tests directly:
-pytest tests/unit/api/test_product_utilities_layer.py -v
-
-# Run CDK CloudFormation synthesis assertions:
-pytest tests/unit/api/test_product_api_stack.py -v
 ```
 
-### Test Suite Coverage (81 Passing Tests)
+#### B. Test Individual Resilience Patterns Locally
+```sh
+# Circuit Breaker 3-state transitions (CLOSED -> OPEN -> HALF-OPEN):
+pytest tests/unit/resilience/test_circuit_breaker.py -v
+
+# Exponential Backoff and 10% Jitter delays:
+pytest tests/unit/resilience/test_retry_utils.py -v
+
+# Graceful degradation (critical abort vs. non-critical cached fallbacks & SQS queues):
+pytest tests/unit/resilience/test_graceful_degradation.py -v
+
+# ResilientExternalService unified wrapper and Lambda handler:
+pytest tests/unit/resilience/test_resilient_service.py -v
+
+# Asynchronous Dead-Letter Queue failure categorization:
+pytest tests/unit/resilience/test_dlq_processor.py -v
+```
+
+#### C. Test Shared Lambda Layer Modules Locally
+Verify that layer modules (`product_validator`, `database_helper`, `response_formatter`) function identically both in direct imports and via backward-compatible bridges:
+```sh
+pytest tests/unit/api/test_product_utilities_layer.py -v
+```
+
+#### D. Verify CloudFormation Synthesis & Layer Bindings
+Synthesize the CDK stack to confirm all Lambda functions have both `PydanticLayer` and `ProductUtilitiesLayer` attached in the synthesized CloudFormation template:
+```sh
+pytest tests/unit/api/test_product_api_stack.py -v
+cdk synth ProductApiStack > /dev/null
+```
+
+#### E. Test Locally with AWS SAM CLI (Optional)
+If Docker is running on your development machine, invoke API Gateway and Lambda functions locally with layers mounted:
+```sh
+# Generate CloudFormation template
+cdk synth --no-staging > template.yaml
+
+# Start local API Gateway emulator
+sam local start-api -t template.yaml
+
+# In a separate terminal, test the local endpoint:
+curl -s http://127.0.0.1:3000/products | jq .
+```
+
+---
+
+### Test Suite Coverage (95 Passing Tests)
 
 | Subfolder | Test Module | Coverage Area | Status |
 | :--- | :--- | :--- | :--- |
@@ -185,7 +283,82 @@ pytest tests/unit/api/test_product_api_stack.py -v
 | | `test_cache_db.py` | Cache-Aside retrieval, GSI query caching, cache invalidation, TTL strategies, metrics | **Passed** |
 | **`tests/unit/resilience/`** | `test_circuit_breaker.py` | Circuit breaker 3-state state machine, timeout alias, `process_payment` integration | **Passed** |
 | | `test_retry_utils.py` | Exponential backoff, jitter, direct runner, `get_shipping_rate`, `RetryPolicyManager` | **Passed** |
+| | `test_graceful_degradation.py` | Order processing resilience, critical payment abort, degraded fallbacks & SQS triage | **Passed** |
+| | `test_resilient_service.py` | `ResilientExternalService` unified orchestration, fast fail, fallbacks, Lambda handler | **Passed** |
 | | `test_dlq_processor.py` | Asynchronous DLQ message triage, timeout/rate-limit classification | **Passed** |
+
+---
+
+### 2. Real AWS Cloud Testing & Verification
+
+Follow these steps to deploy and test the layers, functions, and resilience behavior on your real AWS account:
+
+#### Step 1: Deploy the CDK Stack
+```sh
+cd 07_advanced_lambda_patterns_for_optimization_and_resilience/product-api
+source .venv/bin/activate
+
+# Deploy the stack to AWS
+cdk deploy ProductApiStack
+```
+Note the `ProductApiEndpoint` URL output at the end of the deployment.
+
+#### Step 2: Verify Attached Layers on Deployed Lambda Functions
+Confirm via AWS CLI that both `ProductUtilitiesLayer` and `PydanticLayer` are attached to your deployed Lambda functions:
+```sh
+aws lambda get-function-configuration \
+    --function-name $(aws lambda list-functions --query "Functions[?contains(FunctionName, 'GetProduct')].FunctionName" --output text) \
+    --query "Layers[*].Arn" \
+    --output table
+```
+You should see ARNs for both layers listed under the function configuration.
+
+#### Step 3: Test API Endpoints & Layer Execution on AWS
+Send requests to your API Gateway to verify that the functions execute with layer-provided validation and response formatting:
+
+```sh
+# 1. Export API Gateway base URL
+export API_URL=$(aws cloudformation describe-stacks \
+  --stack-name ProductApiStack \
+  --query "Stacks[0].Outputs[?OutputKey=='ProductsApiUrl'].OutputValue" \
+  --output text)
+
+echo "API_URL: $API_URL"
+
+# 2. Test POST /products (exercises product_validator & response_formatter from layer)
+CREATE_RESP=$(curl -s -X POST "$API_URL/products" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Cloud Resilience Keyboard",
+    "price": 179.99,
+    "category": "Electronics",
+    "description": "Ergonomic mechanical keyboard with resilient switches"
+  }')
+
+echo "$CREATE_RESP" | jq .
+
+# Export the auto-assigned product ID (.id is top-level in response)
+export PRODUCT_ID=$(echo "$CREATE_RESP" | jq -r '.id')
+echo "Created Product ID: $PRODUCT_ID"
+
+# 3. Test GET /products/{id} (exercises database_helper retry logic & layer formatting)
+curl -s "$API_URL/products/$PRODUCT_ID" | jq .
+
+# 4. Test validation failure (verifies layer returns HTTP 400 with contextual suggestions)
+curl -s -X POST "$API_URL/products" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Broken", "price": -10, "category": "InvalidCat"}' | jq .
+```
+
+#### Step 4: Verify Resilience & CloudWatch Telemetry
+Inspect CloudWatch Logs and custom metrics to observe layer execution, retries, and circuit breaker metrics:
+```sh
+# View recent execution logs for GetProduct
+aws logs tail "/aws/lambda/$(aws lambda list-functions --query "Functions[?contains(FunctionName, 'GetProduct')].FunctionName" --output text)" --follow
+
+# Check CloudWatch custom metrics emitted by Circuit Breakers
+aws cloudwatch list-metrics --namespace "ProductAPI/CircuitBreakers"
+```
 
 ---
 
@@ -200,11 +373,14 @@ cd layers/product_utilities
 zip -r product-utilities-layer.zip python/
 
 # 2. Publish new version to AWS Lambda
-aws lambda publish-layer-version \
+NEW_LAYER_ARN=$(aws lambda publish-layer-version \
     --layer-name product-utilities \
     --description "v1.1.0 - Updated validation rules" \
     --zip-file fileb://product-utilities-layer.zip \
-    --compatible-runtimes python3.13
+    --compatible-runtimes python3.13 \
+    --query "LayerVersionArn" --output text)
+
+echo "Published Layer: $NEW_LAYER_ARN"
 ```
 
 ### 2. Instant Rollback Without Function Redeployment
@@ -212,14 +388,53 @@ If an update causes issues, functions can instantly be rolled back to a previous
 
 ```sh
 # Roll back a single function to Layer Version 1
+FUNC_NAME=$(aws lambda list-functions --query "Functions[?contains(FunctionName, 'GetProduct')].FunctionName" --output text)
+
 aws lambda update-function-configuration \
-    --function-name GetProduct \
-    --layers arn:aws:lambda:ap-southeast-2:189053741578:layer:ProductUtilitiesLayer:1
+    --function-name "$FUNC_NAME" \
+    --layers $(aws lambda list-layer-versions --layer-name product-utilities --query "LayerVersions[-1].LayerVersionArn" --output text)
 
 # Batch rollback multiple functions
 for func in GetProduct QueryProducts InsertProduct UpdateProduct; do
+    REAL_FUNC=$(aws lambda list-functions --query "Functions[?contains(FunctionName, '$func')].FunctionName" --output text)
     aws lambda update-function-configuration \
-        --function-name $func \
+        --function-name "$REAL_FUNC" \
         --layers arn:aws:lambda:ap-southeast-2:189053741578:layer:ProductUtilitiesLayer:1
 done
 ```
+
+---
+
+## 🧹 Clean Up
+
+### 1. Empty the S3 Media Bucket
+CloudFormation cannot delete an S3 bucket if it contains objects or object versions:
+
+```sh
+# Discover and empty the media bucket
+BUCKET_NAME=$(aws cloudformation describe-stacks \
+  --stack-name ProductApiStack \
+  --query "Stacks[0].Outputs[?contains(OutputKey, 'Bucket')].OutputValue" \
+  --output text 2>/dev/null)
+
+if [ -n "$BUCKET_NAME" ] && [ "$BUCKET_NAME" != "None" ]; then
+    echo "Emptying S3 bucket: $BUCKET_NAME"
+    aws s3 rm "s3://$BUCKET_NAME" --recursive
+fi
+```
+
+### 2. Destroy CloudFormation stack
+```sh 
+cdk destroy ProductApiStack
+```
+
+### 3. Delete Manually Published Layer Versions
+If you published manual layer versions via `aws lambda publish-layer-version` during the versioning walkthrough, delete them since they exist outside the CDK CloudFormation stack:
+
+```sh
+for version in $(aws lambda list-layer-versions --layer-name product-utilities --query "LayerVersions[*].Version" --output text 2>/dev/null); do
+    echo "Deleting manual layer version: $version"
+    aws lambda delete-layer-version --layer-name product-utilities --version-number "$version"
+done
+```
+
