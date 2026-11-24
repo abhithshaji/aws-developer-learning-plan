@@ -1,0 +1,5 @@
+# Dependencies for product-utilities layer
+# Note: Pydantic is provided via the separate PydanticLayer
+# Boto3 is pre-installed in the AWS Lambda Python runtime
+boto3>=1.35.0
+pydantic>=2.0.0

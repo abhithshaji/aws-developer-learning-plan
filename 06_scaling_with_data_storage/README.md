@@ -627,3 +627,9 @@ fi
 # 2. Destroy CloudFormation stack
 cdk destroy ProductApiStack
 ```
+
+---
+
+## ⏭️ Next Step
+
+Proceed to **[Module 07: Advanced Lambda Patterns for Optimization and Resilience](../07_advanced_lambda_patterns_for_optimization_and_resilience/README.md)** to learn how to optimize our serverless microservice architecture for performance, maintainability, and operational resilience.
