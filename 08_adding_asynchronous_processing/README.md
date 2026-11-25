@@ -8,70 +8,55 @@ In this module, you learn how to address the responsiveness challenges that prev
 
 If you are coming from **Module 07**, here is what has been introduced in this module:
 
-### 1. Creation of the Shared `product-utilities` Lambda Layer
-- **Candidate Identification**:
-  - **Data Validation**: Centralized Pydantic schemas and boundary rules into `product_validator.py`.
-  - **Database Helpers**: Consolidated DynamoDB connection management, CRUD operations, GSI category querying, and optimistic locking into `database_helper.py`.
-  - **Response Formatting**: Standardized API Gateway JSON response envelopes, CORS headers, Decimal serialization, and contextual error suggestion builders into `response_formatter.py`.
-- **Packaging Structure (`layers/product_utilities/`)**:
-  ```text
-  product-utilities-layer/
-  ├── python/
-  │   ├── __init__.py
-  │   ├── product_validator.py       # Pydantic schemas & field-level validation
-  │   ├── database_helper.py         # DynamoDB CRUD, queries & audit attributes
-  │   └── response_formatter.py      # Standardized APIGW headers & JSON envelopes
-  └── requirements.txt               # Layer runtime dependency specifications
-  ```
-- **AWS Runtime Mounting**:
-  - AWS Lambda extracts layer archives into `/opt`.
-  - In Python runtimes, `/opt/python` is pre-configured in `sys.path`.
-  - Functions can import layer modules directly (`import product_validator`, `import database_helper`, `import response_formatter`) with zero local file path coupling.
+### 1. SQS Order Processing Queue & Dead-Letter Queue (`utils/sqs_order_queue.py`)
+- **`create_order_processing_queue()`**: Creates `order-processing-queue` (5-minute `VisibilityTimeoutSeconds`, 14-day `MessageRetentionPeriod`, 20-second long polling `ReceiveMessageWaitTimeSeconds`, and a `RedrivePolicy` with `maxReceiveCount: 3`) alongside `order-processing-dlq` for failed messages.
+- **`send_order_to_queue(order_data, queue_url)`**: Enqueues order payloads with UTC timestamps, `processing_steps` metadata, and `order_priority` / `customer_tier` message attributes.
 
-### 2. Backward-Compatible Project Architecture
-- The existing microservice modules (`db/product_schema.py`, `db/products_db.py`, and `utils/response_utils.py`) act as clean bridges that re-export from the shared layer.
-- Existing Lambda handlers and test suites continue to function with zero regressions.
+### 2. SQS Order Processor Lambda (`lambda_code/order_processor.py`)
+- **`handler(event, context)`**: Consumes SQS batch `Records`, executes the multi-step `process_order_workflow`, and raises `OrderProcessingError` on failure so SQS automatically retries and routes persistent failures to the DLQ.
+- **`validate_inventory(items)`**: Checks `Products` DynamoDB table stock availability before payment/shipping execution, with compensating `refund_payment` on downstream label creation failures.
 
-### 3. CDK Infrastructure Integration (`product_api_stack.py`)
-- Provisioned `ProductUtilitiesLayer` alongside `PydanticLayer` via `aws_lambda.LayerVersion`:
-  ```python
-  self.product_utils_layer = aws_lambda.LayerVersion(
-      self, "ProductUtilitiesLayer",
-      code=aws_lambda.Code.from_asset("layers/product_utilities"),
-      compatible_runtimes=[lambda_runtime],
-      description="v1.0.0 - Shared validation, database helpers, and response formatting"
-  )
-  ```
-- Attached the layer to all core REST and Media Lambda functions.
+### 3. SQS Monitoring & Scaling (`utils/sqs_monitoring.py`)
+- **`monitor_queue_metrics(queue_url)`**: Combines real-time SQS attributes (`ApproximateNumberOfMessages`, `ApproximateNumberOfMessagesNotVisible`) with CloudWatch `AWS/SQS` `ApproximateNumberOfVisibleMessages` statistics.
+- **`scale_processing_capacity(queue_metrics)`**: Generates `scale_up` (when `visible_messages > 100`, capped at 50) and `scale_down` (when `max_queue_depth < 5` and `visible_messages < 10`) recommendations.
 
-### 4. Downstream Resilience: Circuit Breaker Pattern (`utils/circuit_breaker.py`)
-- **State Machine Protection**: Prevents repeated calls to failing third-party services (e.g. external payment gateways or relational databases) via a 3-state machine (`CLOSED`, `OPEN`, `HALF_OPEN`).
-- **Lambda Concurrency Preservation**: When a downstream service goes down, Lambda invocations fail fast ($< 1\text{ ms}$) rather than hanging until the 29-second API Gateway timeout, saving compute costs and preventing regional concurrency pool exhaustion.
-- **Service Integration Example (`process_payment`)**: Wraps `payment_circuit = CircuitBreaker(failure_threshold=5, timeout=30)` to gracefully catch open breaker exceptions and return controlled failure envelopes.
-- **Telemetry**: Emits `CircuitBreakerState` and `FailureCount` metrics to Amazon CloudWatch under namespace `ProductAPI/CircuitBreakers`.
+### 4. Amazon SNS Topics, Publishing & Filtering (`utils/sns_notifications.py`)
+- **`create_notification_topics()` & `subscribe_to_notifications()`**: Provisions `customer-notifications` (linear retry policy), `system-alerts` (exponential retry policy), and `inventory-alerts` topics.
+- **`send_order_confirmation()`**: Publishes `MessageStructure='json'` payloads tailored for `default`, `email` (`create_email_message`), and `sms` (`create_sms_message`) channels with filtering attributes.
+- **`setup_filtered_subscriptions()` & `send_inventory_alert()`**: Configures `FilterPolicy` rules (`customer_tier`, `order_type`) and publishes stock alerts with `medium`/`high` urgency.
 
-### 5. Retry Logic with Exponential Backoff & Jitter (`utils/retry_utils.py`)
-- **Exponential Backoff**: Doubles the delay between consecutive retry attempts ($delay = base\_delay \times 2^{attempt}$) to give struggling downstream services breathing room to recover.
-- **Full Jitter**: Adds a random variation ($0 \le jitter \le 0.1 \times delay$) to eliminate synchronized retry spikes across parallel Lambda invocations (averting the "thundering herd" problem).
-- **Dual Invocation Support**:
-  - Direct execution runner: `retry_with_exponential_backoff(func, max_retries=3, base_delay=0.1, max_delay=5)`
-  - Parameterized decorator: `@retry_with_exponential_backoff(max_retries=2, base_delay=0.5, max_delay=3)`
-- **Shipping Rate Calculation (`get_shipping_rate`)**: Wraps third-party shipping API calculations with exponential backoff and automatically falls back to cached regional rates (`get_cached_rate`) if all retries are exhausted.
+### 5. Event-Driven Lambda Integration & Rollback (`lambda_code/async_workflow_handlers.py`)
+- **`order_processor_handler`**, **`inventory_monitor_handler`**, and **`notification_dispatcher_handler`**: Orchestrate SQS consumption, DynamoDB low-stock scans, and SNS attribute-based notification routing using `CUSTOMER_NOTIFICATION_TOPIC`, `SYSTEM_ALERT_TOPIC`, and `INVENTORY_ALERT_TOPIC` environment variables.
+- **`execute_order_workflow()` & `rollback_completed_steps()`**: Executes workflow steps sequentially and rolls back completed steps in reverse order on failure.
+- **`configure_lambda_triggers()`**: Wires SQS `create_event_source_mapping` (`BatchSize=10`, `MaximumBatchingWindowInSeconds=5`) and SNS `add_permission`.
 
-### 6. Graceful Degradation Pattern (`utils/graceful_degradation.py`)
-- **Critical vs. Non-Critical Decomposition**:
-  - **Payment (Critical - Must Succeed)**: Retried with exponential backoff. If all attempts fail, order processing halts immediately with `status: "failed"` to prevent unpaid order dispatch.
-  - **Shipping Rate (Non-Critical - Fallback)**: If live carrier calculations fail after retries, degrades gracefully to estimated/cached rates (`get_estimated_shipping_rate`) without blocking checkout.
-  - **Inventory Deduction (Non-Critical - Asynchronous Triage)**: If synchronous stock decrement fails, enqueues the payload to SQS (`queue_inventory_update`) for asynchronous reconciliation.
-  - **Customer Email (Non-Critical - Asynchronous Triage)**: If transactional email delivery fails, enqueues the notification (`queue_email`) for background dispatch.
-- **End-to-End Orchestration (`process_order`)**: Guarantees customer transactions succeed even during multi-service downstream degradations as long as critical payment was secured.
+---
 
-### 7. Unified Resilience Strategies: `ResilientExternalService` (`utils/resilient_service.py`)
-- **Composition of Patterns**: Combines **Circuit Breaker** (macro outage fail-fast) and **Exponential Backoff with Jitter** (micro glitch recovery) with optional **Graceful Degradation** (fallbacks) into a single reusable object.
-- **Fail-Fast Defense**: When downstream services experience extended outages, the circuit trips to `OPEN`, immediately returning fallback data without burning execution time or exhausting Lambda concurrency.
-- **Lambda Handler Integration (`handler`)**:
-  - Demonstrates strict error handling for critical payment flows (HTTP 500 on failure).
-  - Demonstrates fallback execution for non-critical shipping rate calculation (HTTP 200 with cached rates).
+## 🏛️ Event-Driven Asynchronous Architecture
+
+```text
+  ┌──────────────┐      send_message      ┌──────────────────────────┐
+  │  Client/API  │ ─────────────────────▶ │  order-processing-queue  │
+  └──────────────┘                        └────────────┬─────────────┘
+                                                       │ (maxReceiveCount=3)
+                                      ┌────────────────┴────────────────┐
+                                      ▼                                 ▼
+                       ┌─────────────────────────────┐      ┌───────────────────────┐
+                       │   order_processor_handler   │      │  order-processing-dlq │
+                       │ (workflow + reverse rollback)│      │  (failed > 3 retries) │
+                       └──────────────┬──────────────┘      └───────────────────────┘
+                                      │ publish
+                 ┌────────────────────┼────────────────────┐
+                 ▼                                         ▼
+  ┌──────────────────────────────┐          ┌──────────────────────────────┐
+  │    customer-notifications    │          │         system-alerts        │
+  │   (FilterPolicy: tier/type)  │          │    (exponential backoff)     │
+  └──────────────┬───────────────┘          └──────────────────────────────┘
+                 │
+        ┌────────┴────────┐
+        ▼                 ▼
+   Email (VIP)        SMS (Express)
+```
 
 ---
 
@@ -134,7 +119,7 @@ If you are coming from **Module 07**, here is what has been introduced in this m
 ## 📂 Project Structure
 
 ```text
-07_advanced_lambda_patterns_for_optimization_and_resilience/product-api/
+08_adding_asynchronous_processing/product-api/
 ├── cdk.json                           # CDK application configuration
 ├── requirements.txt                   # Production dependencies (aws-cdk, pydantic, redis>=5.0.0)
 ├── requirements-dev.txt               # Testing dependencies (pytest, moto[s3,dynamodb])
@@ -155,8 +140,11 @@ If you are coming from **Module 07**, here is what has been introduced in this m
 │   ├── product_schema.py              # Bridges to product_validator
 │   ├── products_db.py                 # Bridges to database_helper
 │   └── cache_db.py                    # Valkey caching layer
-├── utils/                             # Resilience & Infrastructure Helpers
+├── utils/                             # Asynchronous Messaging, Resilience & Infrastructure Helpers
 │   ├── __init__.py
+│   ├── sqs_order_queue.py             # Order processing SQS queue & DLQ setup + producer
+│   ├── sqs_monitoring.py              # SQS CloudWatch metrics & capacity scaling
+│   ├── sns_notifications.py           # SNS topics, multi-format messages & FilterPolicy setup
 │   ├── response_utils.py              # Bridges to response_formatter
 │   ├── retry_utils.py                 # Exponential backoff with full jitter & shipping rates
 │   ├── circuit_breaker.py             # Circuit breaker state machine & payment processing
@@ -168,6 +156,8 @@ If you are coming from **Module 07**, here is what has been introduced in this m
 │   └── elasticache_setup.py           # ElastiCache / Valkey helper
 ├── lambda_code/                       # Lambda Function Handlers
 │   ├── __init__.py
+│   ├── order_processor.py             # SQS order processing consumer & inventory validation
+│   ├── async_workflow_handlers.py     # SQS/SNS workflow handlers, reverse rollback & triggers
 │   ├── get_product.py                 # GET /products/{id}
 │   ├── insert_product.py              # POST /products
 │   ├── query_products.py              # GET /products
@@ -183,22 +173,16 @@ If you are coming from **Module 07**, here is what has been introduced in this m
     ├── __init__.py
     ├── event_factory.py               # Standardized APIGatewayEventFactory
     └── unit/
-        ├── api/
-        │   ├── test_product_utilities_layer.py # Direct tests for layer modules
-        │   ├── test_product_api_stack.py       # CDK assertions (LayerVersion properties)
-        │   ├── test_products_db.py
-        │   ├── test_product_validation.py
-        │   ├── test_get_product.py
-        │   ├── test_insert_product.py
-        │   └── test_error_handling.py
-        ├── storage/                           # S3 & image processing tests
-        ├── cache/                             # ElastiCache & Valkey tests
-        └── resilience/
-            ├── test_circuit_breaker.py        # Circuit breaker 3-state state machine & payments
-            ├── test_retry_utils.py            # Exponential backoff & jitter calculations
-            ├── test_graceful_degradation.py   # Multi-service fallback & SQS async triage
-            ├── test_resilient_service.py      # ResilientExternalService & handler tests
-            └── test_dlq_processor.py          # Asynchronous DLQ message triage
+        ├── api/                       # API, DynamoDB & layer tests
+        ├── async_processing/          # Module 08 SQS, SNS & async workflow tests
+        │   ├── test_sqs_order_queue.py
+        │   ├── test_order_processor.py
+        │   ├── test_sqs_monitoring.py
+        │   ├── test_sns_notifications.py
+        │   └── test_async_workflow_handlers.py
+        ├── storage/                   # S3 & image processing tests
+        ├── cache/                     # ElastiCache & Valkey tests
+        └── resilience/                # Circuit breaker, retry & DLQ tests
 ```
 
 ---
@@ -209,7 +193,7 @@ If you are coming from **Module 07**, here is what has been introduced in this m
 Activate the virtual environment and install project dependencies:
 
 ```sh
-cd 07_advanced_lambda_patterns_for_optimization_and_resilience/product-api
+cd 08_adding_asynchronous_processing/product-api
 python3 -m venv .venv
 source .venv/bin/activate                 # macOS/Linux
 # .venv\Scripts\Activate.ps1             # Windows PowerShell
@@ -265,29 +249,24 @@ layers/product_utilities/
 
 You can verify all layers, handlers, resilience patterns, and infrastructure templates locally without incurring AWS charges:
 
-#### A. Run the Entire Test Suite (95 Passing Tests)
+#### A. Run the Entire Test Suite (124 Passing Tests)
 ```sh
-cd 07_advanced_lambda_patterns_for_optimization_and_resilience/product-api
+cd 08_adding_asynchronous_processing/product-api
 source .venv/bin/activate
 pytest tests/unit/ -v
 ```
 
-#### B. Test Individual Resilience Patterns Locally
+#### B. Test Module 08 Asynchronous Processing Patterns Locally
 ```sh
-# Circuit Breaker 3-state transitions (CLOSED -> OPEN -> HALF-OPEN):
-pytest tests/unit/resilience/test_circuit_breaker.py -v
+# Run all SQS, SNS, and async workflow tests (29 tests):
+pytest tests/unit/async_processing/ -v
 
-# Exponential Backoff and 10% Jitter delays:
-pytest tests/unit/resilience/test_retry_utils.py -v
-
-# Graceful degradation (critical abort vs. non-critical cached fallbacks & SQS queues):
-pytest tests/unit/resilience/test_graceful_degradation.py -v
-
-# ResilientExternalService unified wrapper and Lambda handler:
-pytest tests/unit/resilience/test_resilient_service.py -v
-
-# Asynchronous Dead-Letter Queue failure categorization:
-pytest tests/unit/resilience/test_dlq_processor.py -v
+# Individual test suites:
+pytest tests/unit/async_processing/test_sqs_order_queue.py -v
+pytest tests/unit/async_processing/test_order_processor.py -v
+pytest tests/unit/async_processing/test_sqs_monitoring.py -v
+pytest tests/unit/async_processing/test_sns_notifications.py -v
+pytest tests/unit/async_processing/test_async_workflow_handlers.py -v
 ```
 
 #### C. Test Shared Lambda Layer Modules Locally
@@ -318,10 +297,15 @@ curl -s http://127.0.0.1:3000/products | jq .
 
 ---
 
-### Test Suite Coverage (95 Passing Tests)
+### Test Suite Coverage (124 Passing Tests)
 
 | Subfolder | Test Module | Coverage Area | Status |
 | :--- | :--- | :--- | :--- |
+| **`tests/unit/async_processing/`** | `test_sqs_order_queue.py` | Order queue & DLQ creation, redrive policy, SQS producer attributes | **Passed** |
+| | `test_order_processor.py` | SQS batch handler, 4-step workflow, compensating refunds, Moto DynamoDB inventory | **Passed** |
+| | `test_sqs_monitoring.py` | SQS queue attributes, CloudWatch queue depth metrics, scale up/down recommendations | **Passed** |
+| | `test_sns_notifications.py` | Topic delivery policies, multi-protocol JSON confirmations, `FilterPolicy`, alerts | **Passed** |
+| | `test_async_workflow_handlers.py` | SQS/SNS Lambda handlers, reverse-order rollback, event source mappings | **Passed** |
 | **`tests/unit/api/`** | `test_product_utilities_layer.py` | Direct validation of `product_validator`, `database_helper`, and `response_formatter` | **Passed** |
 | | `test_product_api_stack.py` | CDK assertions for `ProductUtilitiesLayer`, `PydanticLayer`, SQS DLQ, S3 Bucket | **Passed** |
 | | `test_products_db.py` | DynamoDB mock CRUD & query operations | **Passed** |
@@ -348,15 +332,20 @@ curl -s http://127.0.0.1:3000/products | jq .
 
 Follow these steps to deploy and test the layers, functions, and resilience behavior on your real AWS account:
 
-#### Step 1: Deploy the CDK Stack
+#### Step 1: Deploy the CDK Stack & Configure Lambda Environment Variables
 ```sh
-cd 07_advanced_lambda_patterns_for_optimization_and_resilience/product-api
+cd 08_adding_asynchronous_processing/product-api
 source .venv/bin/activate
 
 # Deploy the stack to AWS
 cdk deploy ProductApiStack
 ```
-Note the `ProductApiEndpoint` URL output at the end of the deployment.
+Note the `ProductApiEndpoint` URL output at the end of the deployment. When deploying Lambda functions that consume SNS topic ARNs (`order_processor_handler`, `inventory_monitor_handler`), set their environment variables:
+```sh
+aws lambda update-function-configuration \
+    --function-name <your-function-name> \
+    --environment "Variables={CUSTOMER_NOTIFICATION_TOPIC=<topic-arn>,SYSTEM_ALERT_TOPIC=<topic-arn>,INVENTORY_ALERT_TOPIC=<topic-arn>}"
+```
 
 #### Step 2: Verify Attached Layers on Deployed Lambda Functions
 Confirm via AWS CLI that both `ProductUtilitiesLayer` and `PydanticLayer` are attached to your deployed Lambda functions:
@@ -490,6 +479,24 @@ If you published manual layer versions via `aws lambda publish-layer-version` du
 for version in $(aws lambda list-layer-versions --layer-name product-utilities --query "LayerVersions[*].Version" --output text 2>/dev/null); do
     echo "Deleting manual layer version: $version"
     aws lambda delete-layer-version --layer-name product-utilities --version-number "$version"
+done
+```
+
+### 4. Delete Standalone SQS Queues & SNS Topics (If Created Manually)
+If you ran `create_order_processing_queue()` or `create_notification_topics()` directly via `boto3`, clean up those standalone resources:
+
+```sh
+# Delete SQS queues
+for q_name in order-processing-queue order-processing-dlq; do
+    Q_URL=$(aws sqs get-queue-url --queue-name "$q_name" --query "QueueUrl" --output text 2>/dev/null)
+    if [ -n "$Q_URL" ] && [ "$Q_URL" != "None" ]; then
+        aws sqs delete-queue --queue-url "$Q_URL"
+    fi
+done
+
+# Delete SNS topics
+for topic_arn in $(aws sns list-topics --query "Topics[?contains(TopicArn, 'customer-notifications') || contains(TopicArn, 'system-alerts') || contains(TopicArn, 'inventory-alerts')].TopicArn" --output text 2>/dev/null); do
+    aws sns delete-topic --topic-arn "$topic_arn"
 done
 ```
 
