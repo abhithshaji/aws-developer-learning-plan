@@ -97,6 +97,7 @@ aws-developer-learning-plan/
 ├── 05_testing_and_error_handling/                    # Unit testing (Pytest/Moto), DLQ, Retries, Circuit Breaker & SAM CLI
 ├── 06_scaling_with_data_storage/                     # Amazon S3 media storage, presigned URLs, event triggers & ElastiCache (Valkey) caching
 ├── 07_advanced_lambda_patterns_for_optimization_and_resilience/ # Shared utility layers, versioning & resilience patterns
+├── 08_adding_asynchronous_processing/                 # SQS queues, SNS pub/sub filtering & EventBridge routing
 ├── ...                                               # Upcoming modules
 └── README.md                                         # Main documentation & companion guide
 ```
@@ -112,7 +113,7 @@ aws-developer-learning-plan/
 | **05** | [Testing and Error Handling](./05_testing_and_error_handling) | Automated unit testing (Pytest/Moto), Dead-Letter Queues (DLQ), Lambda Destinations, Exponential Backoff, Circuit Breakers, and SAM CLI local testing | ✅ Complete |
 | **06** | [Scaling with Data Storage](./06_scaling_with_data_storage) | Amazon S3 object storage, Presigned PUT/GET URLs, DynamoDB atomic media linking, S3 event triggers, and ElastiCache (Valkey) in-memory caching | ✅ Complete |
 | **07** | [Advanced Lambda Patterns](./07_advanced_lambda_patterns_for_optimization_and_resilience) | Shared Lambda layers, layer versioning, rollback strategies, optimization & resilience | ✅ Complete |
-| **08** | [Adding Asynchronous Processing](./08_adding_asynchronous_processing) | Asynchronous task offloading, SQS message queues, worker Lambdas, decoupled event processing | ⏳ Planned |
+| **08** | [Adding Asynchronous Processing](./08_adding_asynchronous_processing) | SQS queues & DLQs, SNS multi-protocol pub/sub & `FilterPolicy`, EventBridge custom buses & rules, reverse-order workflow rollbacks | ✅ Complete |
 | **09+** | *Upcoming Modules* | Data modeling & access patterns, Cognito authentication, CI/CD pipelines, Observability | ⏳ Planned |
 
 ---

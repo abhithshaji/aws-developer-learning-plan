@@ -30,6 +30,17 @@ If you are coming from **Module 07**, here is what has been introduced in this m
 - **`execute_order_workflow()` & `rollback_completed_steps()`**: Executes workflow steps sequentially and rolls back completed steps in reverse order on failure.
 - **`configure_lambda_triggers()`**: Wires SQS `create_event_source_mapping` (`BatchSize=10`, `MaximumBatchingWindowInSeconds=5`) and SNS `add_permission`.
 
+### 6. Amazon EventBridge Custom Buses & Event Routing (`utils/eventbridge_routing.py`)
+- **`create_event_buses()`**: Provisions dedicated domain buses (`online-store-orders`, `online-store-inventory`, `online-store-customers`).
+- **`publish_order_event()` & `publish_inventory_event()`**: Publishes structured domain events (`store.orders`, `store.inventory`) and raises `EventPublishError` when `FailedEntryCount > 0`.
+- **`create_order_processing_rules()` & `create_inventory_alert_rules()`**: Configures routing rules with `InputTransformer` payloads targeting Lambda, SNS, and FIFO SQS (`MessageGroupId`).
+- **`create_advanced_event_patterns()` & `create_content_based_routing_rule()`**: Implements numeric (`>= 500`, `<= 5`), nested (`shippingAddress.state`), and existence (`exists: True`) pattern matching.
+
+### 7. EventBridge Workflows, DLQ Error Handling & Dashboards (`lambda_code/eventbridge_handlers.py`, `utils/eventbridge_error_handling.py`)
+- **`inventory_processor_handler`**, **`notification_processor_handler`**, and **`analytics_processor_handler`**: Process EventBridge `Order Placed` events to atomically decrement `Products` inventory, publish to `ORDER_TOPIC_ARN`, and persist records in `AnalyticsEvents`.
+- **`setup_event_error_handling()` & `process_failed_events_handler()`**: Creates `eventbridge-failed-events-dlq`, attaches target `RetryPolicy` (`MaximumRetryAttempts=3`, `MaximumEventAge=3600`) + `DeadLetterConfig`, and triages failed events (`is_recoverable` / `attempt_recovery` / `store_for_investigation`).
+- **`create_event_monitoring_dashboard()`**: Creates the `EventDrivenArchitecture-Monitoring` CloudWatch dashboard for `AWS/Events` and `AWS/Lambda` metrics.
+
 ---
 
 ## 🏛️ Event-Driven Asynchronous Architecture
@@ -37,25 +48,23 @@ If you are coming from **Module 07**, here is what has been introduced in this m
 ```text
   ┌──────────────┐      send_message      ┌──────────────────────────┐
   │  Client/API  │ ─────────────────────▶ │  order-processing-queue  │
-  └──────────────┘                        └────────────┬─────────────┘
-                                                       │ (maxReceiveCount=3)
-                                      ┌────────────────┴────────────────┐
-                                      ▼                                 ▼
-                       ┌─────────────────────────────┐      ┌───────────────────────┐
-                       │   order_processor_handler   │      │  order-processing-dlq │
-                       │ (workflow + reverse rollback)│      │  (failed > 3 retries) │
-                       └──────────────┬──────────────┘      └───────────────────────┘
-                                      │ publish
-                 ┌────────────────────┼────────────────────┐
-                 ▼                                         ▼
-  ┌──────────────────────────────┐          ┌──────────────────────────────┐
-  │    customer-notifications    │          │         system-alerts        │
-  │   (FilterPolicy: tier/type)  │          │    (exponential backoff)     │
-  └──────────────┬───────────────┘          └──────────────────────────────┘
-                 │
-        ┌────────┴────────┐
-        ▼                 ▼
-   Email (VIP)        SMS (Express)
+  └──────┬───────┘                        └────────────┬─────────────┘
+         │                                             │ (maxReceiveCount=3)
+         │ put_events                     ┌────────────┴────────────┐
+         ▼                                ▼                         ▼
+  ┌──────────────────────────┐   ┌──────────────────┐    ┌─────────────────────┐
+  │ EventBridge Custom Buses │   │  order_processor │    │ order-processing-dlq│
+  │ (orders / inv / cust)    │   └────────┬─────────┘    └─────────────────────┘
+  └──────┬───────────────────┘            │ publish
+         │ Rules & InputTransformer       ▼
+         ├───────────────────▶ ┌──────────────────────────────┐
+         │                     │   SNS Topics & FilterPolicy  │
+         ▼                     │ (customer / system / inv)    │
+  ┌──────────────────────────┐ └──────────────┬───────────────┘
+  │ Lambda Targets + EB DLQ  │                │
+  │ (inventory/notify/stats) │        ┌───────┴───────┐
+  └──────────────────────────┘        ▼               ▼
+                                 Email (VIP)     SMS (Express)
 ```
 
 ---
@@ -145,6 +154,8 @@ If you are coming from **Module 07**, here is what has been introduced in this m
 │   ├── sqs_order_queue.py             # Order processing SQS queue & DLQ setup + producer
 │   ├── sqs_monitoring.py              # SQS CloudWatch metrics & capacity scaling
 │   ├── sns_notifications.py           # SNS topics, multi-format messages & FilterPolicy setup
+│   ├── eventbridge_routing.py         # EventBridge custom buses, rules & content-based patterns
+│   ├── eventbridge_error_handling.py  # EventBridge RetryPolicy, DLQ & CloudWatch dashboard
 │   ├── response_utils.py              # Bridges to response_formatter
 │   ├── retry_utils.py                 # Exponential backoff with full jitter & shipping rates
 │   ├── circuit_breaker.py             # Circuit breaker state machine & payment processing
@@ -158,6 +169,7 @@ If you are coming from **Module 07**, here is what has been introduced in this m
 │   ├── __init__.py
 │   ├── order_processor.py             # SQS order processing consumer & inventory validation
 │   ├── async_workflow_handlers.py     # SQS/SNS workflow handlers, reverse rollback & triggers
+│   ├── eventbridge_handlers.py        # EventBridge inventory, notification, analytics & DLQ handlers
 │   ├── get_product.py                 # GET /products/{id}
 │   ├── insert_product.py              # POST /products
 │   ├── query_products.py              # GET /products
@@ -174,12 +186,14 @@ If you are coming from **Module 07**, here is what has been introduced in this m
     ├── event_factory.py               # Standardized APIGatewayEventFactory
     └── unit/
         ├── api/                       # API, DynamoDB & layer tests
-        ├── async_processing/          # Module 08 SQS, SNS & async workflow tests
+        ├── async_processing/          # Module 08 SQS, SNS, EventBridge & workflow tests
         │   ├── test_sqs_order_queue.py
         │   ├── test_order_processor.py
         │   ├── test_sqs_monitoring.py
         │   ├── test_sns_notifications.py
-        │   └── test_async_workflow_handlers.py
+        │   ├── test_async_workflow_handlers.py
+        │   ├── test_eventbridge_routing.py
+        │   └── test_eventbridge_workflows.py
         ├── storage/                   # S3 & image processing tests
         ├── cache/                     # ElastiCache & Valkey tests
         └── resilience/                # Circuit breaker, retry & DLQ tests
@@ -249,7 +263,7 @@ layers/product_utilities/
 
 You can verify all layers, handlers, resilience patterns, and infrastructure templates locally without incurring AWS charges:
 
-#### A. Run the Entire Test Suite (124 Passing Tests)
+#### A. Run the Entire Test Suite (138 Passing Tests)
 ```sh
 cd 08_adding_asynchronous_processing/product-api
 source .venv/bin/activate
@@ -258,7 +272,7 @@ pytest tests/unit/ -v
 
 #### B. Test Module 08 Asynchronous Processing Patterns Locally
 ```sh
-# Run all SQS, SNS, and async workflow tests (29 tests):
+# Run all SQS, SNS, EventBridge, and async workflow tests (43 tests):
 pytest tests/unit/async_processing/ -v
 
 # Individual test suites:
@@ -267,6 +281,8 @@ pytest tests/unit/async_processing/test_order_processor.py -v
 pytest tests/unit/async_processing/test_sqs_monitoring.py -v
 pytest tests/unit/async_processing/test_sns_notifications.py -v
 pytest tests/unit/async_processing/test_async_workflow_handlers.py -v
+pytest tests/unit/async_processing/test_eventbridge_routing.py -v
+pytest tests/unit/async_processing/test_eventbridge_workflows.py -v
 ```
 
 #### C. Test Shared Lambda Layer Modules Locally
@@ -297,7 +313,7 @@ curl -s http://127.0.0.1:3000/products | jq .
 
 ---
 
-### Test Suite Coverage (124 Passing Tests)
+### Test Suite Coverage (138 Passing Tests)
 
 | Subfolder | Test Module | Coverage Area | Status |
 | :--- | :--- | :--- | :--- |
@@ -306,6 +322,8 @@ curl -s http://127.0.0.1:3000/products | jq .
 | | `test_sqs_monitoring.py` | SQS queue attributes, CloudWatch queue depth metrics, scale up/down recommendations | **Passed** |
 | | `test_sns_notifications.py` | Topic delivery policies, multi-protocol JSON confirmations, `FilterPolicy`, alerts | **Passed** |
 | | `test_async_workflow_handlers.py` | SQS/SNS Lambda handlers, reverse-order rollback, event source mappings | **Passed** |
+| | `test_eventbridge_routing.py` | Custom event buses, `put_events`, FIFO targets, numeric/nested/exists pattern matching | **Passed** |
+| | `test_eventbridge_workflows.py` | EventBridge inventory/SNS/analytics handlers, `RetryPolicy`, DLQ triage & dashboard | **Passed** |
 | **`tests/unit/api/`** | `test_product_utilities_layer.py` | Direct validation of `product_validator`, `database_helper`, and `response_formatter` | **Passed** |
 | | `test_product_api_stack.py` | CDK assertions for `ProductUtilitiesLayer`, `PydanticLayer`, SQS DLQ, S3 Bucket | **Passed** |
 | | `test_products_db.py` | DynamoDB mock CRUD & query operations | **Passed** |
@@ -482,12 +500,12 @@ for version in $(aws lambda list-layer-versions --layer-name product-utilities -
 done
 ```
 
-### 4. Delete Standalone SQS Queues & SNS Topics (If Created Manually)
-If you ran `create_order_processing_queue()` or `create_notification_topics()` directly via `boto3`, clean up those standalone resources:
+### 4. Delete Standalone SQS Queues, SNS Topics & EventBridge Resources (If Created Manually)
+If you ran `create_order_processing_queue()`, `create_notification_topics()`, `create_event_buses()`, `setup_event_error_handling()`, or `create_event_monitoring_dashboard()` directly via `boto3`, clean up those standalone resources:
 
 ```sh
 # Delete SQS queues
-for q_name in order-processing-queue order-processing-dlq; do
+for q_name in order-processing-queue order-processing-dlq eventbridge-failed-events-dlq; do
     Q_URL=$(aws sqs get-queue-url --queue-name "$q_name" --query "QueueUrl" --output text 2>/dev/null)
     if [ -n "$Q_URL" ] && [ "$Q_URL" != "None" ]; then
         aws sqs delete-queue --queue-url "$Q_URL"
@@ -498,6 +516,14 @@ done
 for topic_arn in $(aws sns list-topics --query "Topics[?contains(TopicArn, 'customer-notifications') || contains(TopicArn, 'system-alerts') || contains(TopicArn, 'inventory-alerts')].TopicArn" --output text 2>/dev/null); do
     aws sns delete-topic --topic-arn "$topic_arn"
 done
+
+# Delete custom EventBridge event buses (remove rules/targets first if attached)
+for bus in online-store-orders online-store-inventory online-store-customers; do
+    aws events delete-event-bus --name "$bus" 2>/dev/null || true
+done
+
+# Delete CloudWatch monitoring dashboard
+aws cloudwatch delete-dashboards --dashboard-names EventDrivenArchitecture-Monitoring 2>/dev/null || true
 ```
 
 ---
